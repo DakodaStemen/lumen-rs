@@ -32,9 +32,9 @@ fn serve(dir: PathBuf) -> u16 {
 }
 
 fn respond(mut stream: std::net::TcpStream, dir: &Path) {
-    let mut buffer = [0u8; 2048];
+    let mut buffer = [0u8; 4096];
     let n = stream.read(&mut buffer).unwrap_or(0);
-    let request = String::from_utf8_lossy(&buffer[..n]);
+    let request = String::from_utf8_lossy(&buffer[..n]).into_owned();
     let name = request
         .split_whitespace()
         .nth(1)
@@ -46,20 +46,41 @@ fn respond(mut stream: std::net::TcpStream, dir: &Path) {
     let body = (!name.contains(".."))
         .then(|| std::fs::read(dir.join(name)).ok())
         .flatten();
-    let kind = if name.ends_with(".m3u8") {
-        "application/vnd.apple.mpegurl"
-    } else {
-        "video/mp2t"
+    let kind = match name.rsplit('.').next().unwrap_or("") {
+        "m3u8" => "application/vnd.apple.mpegurl",
+        "mp4" => "video/mp4",
+        "m4a" => "audio/mp4",
+        _ => "video/mp2t",
     };
+    // mpv seeks inside MP4 files, so honour a `Range: bytes=start-[end]` header.
+    let range = request.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        let spec = key
+            .eq_ignore_ascii_case("range")
+            .then(|| value.trim().strip_prefix("bytes="))??;
+        let (start, end) = spec.split_once('-')?;
+        Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()))
+    });
     let _ = match body {
         Some(body) => {
+            let (status, slice, extra) = match range {
+                Some((start, end)) if start < body.len() => {
+                    let end = end.map_or(body.len() - 1, |e| e.min(body.len() - 1));
+                    (
+                        "206 Partial Content",
+                        &body[start..=end],
+                        format!("Content-Range: bytes {start}-{end}/{}\r\n", body.len()),
+                    )
+                }
+                _ => ("200 OK", &body[..], String::new()),
+            };
             let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
+                "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nAccept-Ranges: bytes\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                slice.len()
             );
             stream
                 .write_all(head.as_bytes())
-                .and_then(|_| stream.write_all(&body))
+                .and_then(|_| stream.write_all(slice))
         }
         None => stream
             .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
