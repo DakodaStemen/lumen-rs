@@ -12,8 +12,9 @@ What has been run, and what has not.
   shuffle and repeat, pausing by button and key, file-dialog results, menus (audio tracks,
   chapters, media information), Preferences, rebinding a key and then using it, Escape handling,
   the mini player, the sidebar toggle, double-clicking a queue row, and a range of window sizes.
-- A scripted tour recorded in the real window on Wayland (`docs/demo.gif`, made by
-  `scripts/record-demo.sh`; silent, as its clips have no audio). The frames were reviewed: the welcome
+- A scripted tour of the real window (`docs/demo.gif`, made by `scripts/record-demo.sh`; silent, as its
+  clips have no audio). The current GIF was re-recorded on an X11 virtual display (Xvfb, Mesa llvmpipe,
+  mpv 0.41) with the screen grabbed by ffmpeg (`DEMO_GRAB=1`); the first one came from a Wayland session. The frames were reviewed: the welcome
   screen with recent files, the drop hint, queue filling and playback, the seek bar's hover time and
   chapter name, the Audio & subtitles menu with subtitles appearing, the Video and … menus,
   chapter jumps, speed, the A-B loop, switching queue items, and Preferences on the keyboard tab.
