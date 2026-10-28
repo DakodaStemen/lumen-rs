@@ -7,6 +7,7 @@ use crate::clock::clock;
 use crate::engine::TrackKind;
 use crate::keys::Action;
 use crate::queue::title_of;
+use crate::tuning;
 
 /// A plain entry that closes the menu when clicked.
 fn plain(ui: &mut Ui, label: &str) -> bool {
@@ -159,6 +160,65 @@ impl Frontend {
                 }
             });
         }
+        submenu(ui, "Aspect ratio", |ui| {
+            let current = self.session.engine.aspect();
+            for (value, label) in tuning::ASPECTS {
+                if choice(ui, label, current == value) {
+                    self.session.engine.set_aspect(value);
+                }
+            }
+        });
+        submenu(ui, "Rotate", |ui| {
+            let current = self.session.engine.rotation();
+            for degrees in [0, 90, 180, 270] {
+                if choice(ui, &format!("{degrees}°"), current == degrees) {
+                    self.session.engine.set_rotation(degrees);
+                }
+            }
+        });
+        submenu(ui, "Crop", |ui| {
+            for (ratio, label) in tuning::CROPS {
+                if choice(ui, label, false)
+                    && !self.session.engine.set_crop(ratio)
+                    && ratio.is_some()
+                {
+                    self.session
+                        .flash("Crop needs a playing video and mpv 0.41 or newer");
+                }
+            }
+        });
+        submenu(ui, "Shaders", |ui| {
+            let dir = tuning::shader_dir();
+            let available = tuning::list_shaders(&dir);
+            if available.is_empty() {
+                disabled(ui, "No shaders found");
+                disabled(ui, &format!("Put .glsl files in {}", dir.display()));
+            }
+            let mut changed = false;
+            for name in &available {
+                let on = self.session.store.settings.shaders.contains(name);
+                // A checkbox-style entry that keeps the menu open for several picks.
+                if ui.add(Button::new(name).selected(on)).clicked() {
+                    let list = &mut self.session.store.settings.shaders;
+                    if on {
+                        list.retain(|n| n != name);
+                    } else {
+                        list.push(name.clone());
+                    }
+                    changed = true;
+                }
+            }
+            if !self.session.store.settings.shaders.is_empty() {
+                ui.separator();
+                if plain(ui, "Turn all off") {
+                    self.session.store.settings.shaders.clear();
+                    changed = true;
+                }
+            }
+            if changed {
+                self.session.apply_settings();
+            }
+        });
         submenu(ui, "Frame", |ui| {
             self.entry(ui, ctx, "Next frame", Action::Frame, false);
             self.entry(ui, ctx, "Previous frame", Action::FrameBack, false);
