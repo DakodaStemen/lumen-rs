@@ -51,9 +51,11 @@ fn restart_ignores_the_saved_position() {
     assert!(wait(&mut s, 5, |s| s.position_ms() >= 10_000));
     s.stop();
     s.play_index(0, Some(0), false);
-    assert!(wait(&mut s, 5, |s| s.state() == State::Playing));
+    // The position property can still hold the old file's 10 s for a moment after the state
+    // flips to Playing, so wait for it to settle instead of reading it once.
     assert!(
-        s.position_ms() < 3_000,
+        wait(&mut s, 8, |s| s.state() == State::Playing
+            && s.position_ms() < 3_000),
         "an explicit start overrides resume"
     );
 }
