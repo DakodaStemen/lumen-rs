@@ -74,8 +74,10 @@ fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-fn file_url(path: &str) -> String {
-    format!("file://{path}")
+/// The URL of `name` under `fx` on a local server. yt-dlp output must be http(s), so file URLs won't do.
+fn http_url(fx: &common::Fixture, name: &str) -> String {
+    let port = serve(fx.root.clone());
+    format!("http://127.0.0.1:{port}/{name}")
 }
 
 /// A session with its own Streamlink and yt-dlp, and SponsorBlock off so nothing touches the network.
@@ -174,8 +176,8 @@ fn media_links_play_directly_without_streamlink() {
 fn ytdlp_resolves_separate_video_and_audio_streams() {
     let Some(fx) = fixture() else { return };
     let log = fx.path("ytdlp-args.txt");
-    let video = file_url(&fx.path("video_only.mp4"));
-    let audio = file_url(&fx.path("audio_only.m4a"));
+    let video = http_url(&fx, "video_only.mp4");
+    let audio = http_url(&fx, "audio_only.m4a");
     let ytdlp = script(
         &fx.root,
         "fake-ytdlp",
@@ -206,10 +208,7 @@ fn ytdlp_resolves_separate_video_and_audio_streams() {
         s.queue.items[0].title, "A Resolved Title",
         "the queue shows the video's title"
     );
-    assert_eq!(
-        s.engine.path().as_deref(),
-        Some(video.strip_prefix("file://").unwrap())
-    );
+    assert_eq!(s.engine.path().as_deref(), Some(video.as_str()));
     let audio_tracks = s.engine.tracks(TrackKind::Audio);
     assert_eq!(
         audio_tracks.len(),
@@ -222,6 +221,7 @@ fn ytdlp_resolves_separate_video_and_audio_streams() {
         "--no-playlist",
         "-f",
         "b/bv*+ba",
+        "--",
         "https://video.test/watch?v=abc123",
     ] {
         assert!(
@@ -303,7 +303,7 @@ fn other_streamlink_failures_fall_back_to_ytdlp() {
         "broken-streamlink",
         "echo 'error: Unable to open URL: x' >&2\nexit 1",
     );
-    let video = file_url(&fx.path("single/film.mp4"));
+    let video = http_url(&fx, "single/film.mp4");
     let ytdlp = script(
         &fx.root,
         "good-ytdlp",
@@ -328,7 +328,7 @@ fn other_streamlink_failures_fall_back_to_ytdlp() {
 #[test]
 fn a_slow_lookup_does_not_override_what_the_user_chose_next() {
     let Some(fx) = fixture() else { return };
-    let slow_video = file_url(&fx.path("single/film.mp4"));
+    let slow_video = http_url(&fx, "single/film.mp4");
     let ytdlp = script(
         &fx.root,
         "slow-ytdlp",

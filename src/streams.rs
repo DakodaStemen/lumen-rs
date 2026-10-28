@@ -178,14 +178,23 @@ pub struct Resolved {
     pub urls: Vec<String>,
 }
 
+/// Whether `quality` is safe to put in Streamlink's stream argument: letters, digits, `_` and `+`.
+pub fn is_valid_quality(quality: &str) -> bool {
+    !quality.is_empty()
+        && quality
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'+')
+}
+
 /// Reads the output of `--print "%(extractor_key)s %(id)s" --print title --print urls`.
 pub fn parse_ytdlp(output: &str) -> Option<Resolved> {
     let mut lines = output.lines();
     let (extractor, id) = lines.next()?.split_once(' ')?;
     let title = lines.next()?.trim().to_owned();
     let urls: Vec<String> = lines
-        .filter(|l| l.contains("://"))
-        .map(|l| l.trim().to_owned())
+        .map(str::trim)
+        .filter(|l| is_web(l))
+        .map(str::to_owned)
         .collect();
     Some(Resolved {
         extractor: extractor.to_owned(),
@@ -316,10 +325,14 @@ fn wait_for(child: &Mutex<Child>, job: &Job) -> Option<bool> {
     }
 }
 
+/// The most output kept from a tool; the rest is read and discarded so the tool never blocks.
+const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
+
 fn read_text(mut reader: impl Read + Send + 'static) -> thread::JoinHandle<String> {
     thread::spawn(move || {
         let mut bytes = Vec::new();
-        let _ = reader.read_to_end(&mut bytes);
+        let _ = (&mut reader).take(MAX_OUTPUT).read_to_end(&mut bytes);
+        let _ = io::copy(&mut reader, &mut io::sink());
         String::from_utf8_lossy(&bytes).into_owned()
     })
 }
@@ -401,14 +414,20 @@ impl Pipeline {
     }
 
     /// Asks Streamlink whether a site plugin matches. Never touches the network.
+    /// Runs as part of the job, so replacing the job stops it.
     fn can_handle(&self, streamlink: &PathBuf) -> bool {
-        Command::new(streamlink)
-            .args(["--can-handle-url-no-redirect", &self.page])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        let mut command = Command::new(streamlink);
+        command.args(["--can-handle-url-no-redirect", &self.page]);
+        let Ok(Proc {
+            child,
+            stdout,
+            stderr,
+        }) = spawn(&self.job, &mut command)
+        else {
+            return false;
+        };
+        let (_out, _err) = (read_text(stdout), read_text(stderr));
+        wait_for(&child, &self.job).unwrap_or(false)
     }
 
     /// Runs Streamlink's relay until it exits. Returns the error message if it failed before serving.
@@ -417,7 +436,7 @@ impl Pipeline {
             Ok(port) => port,
             Err(e) => return Some(format!("no free local port ({e})")),
         };
-        let wanted = if self.quality == "best" {
+        let wanted = if self.quality == "best" || !is_valid_quality(&self.quality) {
             "best".to_owned()
         } else {
             format!("{},best", self.quality)
@@ -437,7 +456,7 @@ impl Pipeline {
         if self.low_latency {
             command.args(["--twitch-low-latency", "--kick-low-latency"]);
         }
-        command.args([&self.page, &wanted]);
+        command.args(["--", &self.page, &wanted]);
         let proc = match spawn(&self.job, &mut command) {
             Ok(proc) => proc,
             Err(e) => return Some(format!("could not start streamlink ({e})")),
@@ -473,7 +492,7 @@ impl Pipeline {
     /// Fetches the title and quality list alongside the relay, so it never delays playback.
     fn probe(&self, streamlink: &PathBuf) {
         let mut command = Command::new(streamlink);
-        command.args(["--json", &self.page]);
+        command.args(["--json", "--", &self.page]);
         let Ok(proc) = spawn(&self.job, &mut command) else {
             return;
         };
@@ -513,7 +532,7 @@ impl Pipeline {
             "--print",
             "%(extractor_key)s %(id)s",
         ]);
-        command.args(["--print", "title", "--print", "urls", &self.page]);
+        command.args(["--print", "title", "--print", "urls", "--", &self.page]);
         let (ok, stdout, stderr) = match spawn(&self.job, &mut command) {
             Ok(Proc {
                 child,
@@ -782,6 +801,39 @@ mod tests {
                 .urls
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn ytdlp_urls_must_be_http() {
+        let output = "Generic x\nt\nfile:///etc/passwd\n  HTTPS://v.test/video \nsmb://h/s\nedl://%5\nhttp://v.test/audio\nlavfi://x\n";
+        let r = parse_ytdlp(output).unwrap();
+        assert_eq!(r.urls, ["HTTPS://v.test/video", "http://v.test/audio"]);
+        assert!(
+            parse_ytdlp("Generic x\nt\nfile:///etc/passwd\n")
+                .unwrap()
+                .urls
+                .is_empty(),
+            "nothing usable left, so the caller falls back"
+        );
+    }
+
+    #[test]
+    fn quality_names_are_validated() {
+        for ok in ["best", "720p60", "audio_only", "1080p+", "480p"] {
+            assert!(is_valid_quality(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "--player=evil",
+            "a,b",
+            "a b",
+            "-x",
+            "720p\n",
+            "a/b",
+            "é",
+        ] {
+            assert!(!is_valid_quality(bad), "{bad:?}");
+        }
     }
 
     #[test]
