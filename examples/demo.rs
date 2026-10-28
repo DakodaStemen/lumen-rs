@@ -27,7 +27,10 @@ use lumen_rs::ui::geometry;
 use lumen_rs::video::Video;
 
 const WINDOW: [f32; 2] = [1000.0, 640.0];
-const FRAME_EVERY: f32 = 0.1;
+/// Frames per second of the recording, and of the GIF made from it.
+const FPS: u32 = 20;
+const GIF_FPS: u32 = 10;
+const FRAME_EVERY: f32 = 1.0 / FPS as f32;
 const GIF_WIDTH: u32 = 800;
 
 /// One step of the tour.
@@ -137,7 +140,12 @@ struct Demo {
     hovering: bool,
     next_frame_at: f32,
     encoder: Option<Encoder>,
+    /// An ffmpeg recording the screen itself, used when the display cannot give frames back.
+    grab: Option<Child>,
     frames: u32,
+    /// Frames written to the encoder, counting repeats that stand in for slow captures.
+    written: u32,
+    first_frame_at: Option<f32>,
     finished_at: Option<f32>,
 }
 
@@ -329,6 +337,10 @@ impl Demo {
 
     /// Takes the frames that arrived and requests the next one on schedule.
     fn capture(&mut self, ctx: &egui::Context, raw: &egui::RawInput) -> Result<()> {
+        if self.grab.is_some() {
+            let done = self.finished_at.is_some_and(|end| self.now() - end > 0.5);
+            return if done { self.finish() } else { Ok(()) };
+        }
         for event in &raw.events {
             let Event::Screenshot { image, .. } = event else {
                 continue;
@@ -342,12 +354,17 @@ impl Demo {
                 .iter()
                 .flat_map(|p| [p.r(), p.g(), p.b()])
                 .collect();
+            // The recording has a fixed frame rate, but grabbing a frame sometimes takes longer than
+            // one tick. Repeat the frame to fill the gap so the tour keeps its real pace.
+            let now = self.clock.elapsed().as_secs_f32();
+            let first = *self.first_frame_at.get_or_insert(now);
+            let due = (((now - first) * FPS as f32).round() as u32 + 1).max(self.written + 1);
             let encoder = self.encoder.as_mut().expect("started above");
-            encoder
-                .stdin
-                .as_mut()
-                .context("encoder closed")?
-                .write_all(&rgb)?;
+            let stdin = encoder.stdin.as_mut().context("encoder closed")?;
+            for _ in self.written..due {
+                stdin.write_all(&rgb)?;
+            }
+            self.written = due;
             self.frames += 1;
         }
         let t = self.now();
@@ -363,6 +380,16 @@ impl Demo {
     }
 
     fn finish(&mut self) -> Result<()> {
+        if let Some(mut grab) = self.grab.take() {
+            // ffmpeg finishes the file when it reads `q`.
+            if let Some(mut stdin) = grab.stdin.take() {
+                let _ = stdin.write_all(b"q");
+            }
+            grab.wait()?;
+            make_gif(&self.out)?;
+            eprintln!("wrote {} (screen recording)", self.out.display());
+            std::process::exit(0);
+        }
         let Some(mut encoder) = self.encoder.take() else {
             bail!("no frames were captured")
         };
@@ -375,6 +402,28 @@ impl Demo {
         eprintln!("wrote {} ({} frames)", self.out.display(), self.frames);
         std::process::exit(0);
     }
+}
+
+/// Records the X display with ffmpeg when `DEMO_GRAB=1`. The window's own screenshots read the
+/// picture back from the GPU, which a software-rendered virtual display cannot do for video.
+fn start_grab(out: &std::path::Path) -> Option<Child> {
+    std::env::var_os("DEMO_GRAB")?;
+    let display = std::env::var("DISPLAY").ok()?;
+    Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-f", "x11grab", "-framerate"])
+        .arg(FPS.to_string())
+        .args(["-draw_mouse", "0", "-video_size"])
+        .arg(format!("{}x{}", WINDOW[0] as u32, WINDOW[1] as u32))
+        .arg("-i")
+        .arg(format!("{display}+0,0"))
+        .args([
+            "-an", "-c:v", "libx264", "-crf", "10", "-preset", "veryfast",
+        ])
+        .args(["-pix_fmt", "yuv420p"])
+        .arg(intermediate(out))
+        .stdin(Stdio::piped())
+        .spawn()
+        .ok()
 }
 
 fn intermediate(out: &std::path::Path) -> PathBuf {
@@ -396,7 +445,7 @@ fn start_encoder(out: &std::path::Path, width: usize, height: usize) -> Result<E
             "-s",
             &format!("{width}x{height}"),
             "-r",
-            "10",
+            &FPS.to_string(),
             "-i",
             "-",
             "-an",
@@ -407,7 +456,7 @@ fn start_encoder(out: &std::path::Path, width: usize, height: usize) -> Result<E
             "-c:v",
             "libx264",
             "-crf",
-            "12",
+            "10",
         ])
         .args(["-preset", "veryfast", "-pix_fmt", "yuv420p"])
         .arg(intermediate(out))
@@ -418,11 +467,65 @@ fn start_encoder(out: &std::path::Path, width: usize, height: usize) -> Result<E
     Ok(Encoder { child, stdin })
 }
 
-/// Turns the intermediate video into a GIF with a palette built for it, which keeps the file small.
+/// Turns the intermediate video into a GIF. gifski picks a palette per frame, which keeps text and
+/// gradients clean at a size GitHub will show; plain ffmpeg is the fallback when it is not installed.
 fn make_gif(out: &std::path::Path) -> Result<()> {
+    let result = if which("gifski") {
+        gifski_gif(out)
+    } else {
+        ffmpeg_gif(out)
+    };
+    if std::env::var_os("DEMO_KEEP").is_none() {
+        let _ = std::fs::remove_file(intermediate(out));
+    }
+    result
+}
+
+fn which(program: &str) -> bool {
+    Command::new(program)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+fn gifski_gif(out: &std::path::Path) -> Result<()> {
+    let frames = tempfile::tempdir()?;
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-ss", "1.2", "-i"])
+        .arg(intermediate(out))
+        .args([
+            "-vf",
+            &format!("fps={GIF_FPS},scale={GIF_WIDTH}:-1:flags=lanczos"),
+        ])
+        .arg(frames.path().join("frame%04d.png"))
+        .status()?;
+    if !status.success() {
+        bail!("ffmpeg failed to cut the frames");
+    }
+    let mut command = Command::new("gifski");
+    command
+        .args(["--fps", &GIF_FPS.to_string(), "--quality", "60"])
+        .args(["--lossy-quality", "70"])
+        .args(["--width", &GIF_WIDTH.to_string()])
+        .arg("-o")
+        .arg(out);
+    let mut names: Vec<PathBuf> = std::fs::read_dir(frames.path())?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .collect();
+    names.sort();
+    if !command.args(&names).status()?.success() {
+        bail!("gifski failed to make the GIF");
+    }
+    Ok(())
+}
+
+fn ffmpeg_gif(out: &std::path::Path) -> Result<()> {
     let filter = format!(
-        "fps=10,scale={GIF_WIDTH}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];\
-         [b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
+        "fps={GIF_FPS},scale={GIF_WIDTH}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];\
+         [b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle"
     );
     let status = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error", "-i"])
@@ -430,7 +533,6 @@ fn make_gif(out: &std::path::Path) -> Result<()> {
         .args(["-vf", &filter, "-loop", "0"])
         .arg(out)
         .status()?;
-    let _ = std::fs::remove_file(intermediate(out));
     if !status.success() {
         bail!("ffmpeg failed to make the GIF");
     }
@@ -510,6 +612,12 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             let engine = Engine::new(Output::Window, store.settings.volume)?;
             engine.set_muted(true);
+            // Software decoding: the clips are small, and a hardware path that cannot hand frames to
+            // the recording's GL context (a virtual display, say) would leave the picture black.
+            engine
+                .handle()
+                .set_property("hwdec", "no")
+                .map_err(|e| anyhow!("could not set hwdec: {e}"))?;
             let video = Video::new(&engine, cc)?;
             let mut session = Session::new(engine, store);
             session.streams.tools = Tools::default();
@@ -517,6 +625,7 @@ fn main() -> Result<()> {
             Ok(Box::new(Demo {
                 app,
                 media,
+                grab: start_grab(&out),
                 out,
                 clock: Instant::now(),
                 acts: script(),
@@ -531,6 +640,8 @@ fn main() -> Result<()> {
                 next_frame_at: 0.0,
                 encoder: None,
                 frames: 0,
+                written: 0,
+                first_frame_at: None,
                 finished_at: None,
             }))
         }),

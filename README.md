@@ -120,8 +120,9 @@ Settings in `settings.json`: `stream_quality` (`"best"`, or a name such as `"720
 
 `docs/demo.gif` is recorded from the real player, not mocked up. `scripts/record-demo.sh` makes
 a few silent clips (generated pictures with no audio stream), plays a scripted tour in a real
-window with injected mouse and key input, and encodes the frames. It needs ffmpeg and a desktop
-session, and the player runs muted. Rerun it after changing the interface.
+window with injected mouse and key input, and encodes the frames (with gifski when it is installed, else ffmpeg). It needs ffmpeg and a desktop
+session, and the player runs muted. On a virtual display with software GL, set `DEMO_GRAB=1` so the
+screen itself is recorded. Rerun it after changing the interface.
 
 ## Project layout
 
