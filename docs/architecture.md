@@ -40,7 +40,7 @@ overlay holds the seek bar and transport row, hidden after two seconds without p
 
 ## Timing
 
-`Session::tick` runs every 200 ms, as in the Python version. It restores per-file choices
+`Session::tick` runs every 200 ms. It restores per-file choices
 once mpv has published a file's tracks, saves the position every five seconds, and
 advances the queue when a file ends. A-B looping is done by mpv itself.
 
