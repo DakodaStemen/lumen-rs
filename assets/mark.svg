@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
+  <title>Lumen mark</title>
+  <defs><linearGradient id="g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#7CF0C8"/><stop offset="1" stop-color="#5B8CFF"/></linearGradient><linearGradient id="t" x1="22" y1="19" x2="48" y2="45" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#7CF0C8"/><stop offset="1" stop-color="#5B8CFF"/></linearGradient><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><path d="M18 31.9 H52" stroke="#000" stroke-width="2.4"/></mask></defs>
+  <!-- lens ring, open on the right where the light exits -->
+  <path d="M55.6 40.6 A25 25 0 1 1 55.6 23.4" fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round" opacity=".75"/>
+  <!-- play triangle, split by an aperture blade -->
+  <path mask="url(#m)" d="M25 19.5 L45.6 30.6 Q47.8 32 45.6 33.4 L25 44.5 Q22 46 22 43 V21 Q22 18 25 19.5Z" fill="url(#t)"/>
+</svg>
