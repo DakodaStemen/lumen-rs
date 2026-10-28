@@ -1,10 +1,8 @@
-# Migration coverage
+# Feature status
 
-The Python project is preserved at https://github.com/DakodaStemen/lumen.
-The Rust project has its own Git history, executable, app ID and profile. It does
-not replace the old installation or migrate settings automatically.
+Lumen has its own executable, app ID and profile (`~/.config/lumen-rs`).
 
-| Capability | Rust preview |
+| Capability | Status |
 | --- | --- |
 | Local file playback, hardware decoding | Implemented; headless playback tests, one manual run on Wayland |
 | Network URLs (HTTP, RTSP, RTMP, UDP) and the open-stream dialog | Implemented; HTTP HLS tested, RTSP, RTMP and UDP passed to mpv untested |
@@ -45,5 +43,4 @@ not replace the old installation or migrate settings automatically.
 | Packaged distribution | Pending |
 | Measured speed, memory or latency improvements | Not established |
 
-Settings are not imported: track ids come from mpv and differ from libVLC's, so remembered
-tracks would not match. Remembered positions could be imported later.
+Settings from other players are not imported, because track ids are assigned by mpv.

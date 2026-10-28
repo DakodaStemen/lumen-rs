@@ -3,7 +3,7 @@ name = "lumen-rs"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Lumen rebuilt as a native Rust media player on libmpv."
+description = "Lumen: a native media player for Linux, built in Rust on libmpv."
 license = "MIT"
 repository = "https://github.com/DakodaStemen/lumen-rs"
 

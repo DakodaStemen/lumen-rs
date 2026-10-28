@@ -3,14 +3,13 @@
 
 <p align="center"><img src="docs/demo.gif" width="100%" alt="A tour of Lumen Rust: dropping files, seeking with a hover preview, subtitles, chapters, speed, an A-B loop, the queue and key rebinding"></p>
 
-**An early, working native rewrite of [Lumen](https://github.com/DakodaStemen/lumen).**
-This repository is independent of the Python version. It uses egui/eframe for the
-interface and libmpv for playback, so video is drawn natively on Wayland instead of
-through XWayland. There is no Qt, Python or libVLC in this application.
+**A native media player for Linux.**
+Lumen uses egui/eframe for the interface and libmpv for playback, so video is drawn
+natively on Wayland instead of through XWayland. It is a single Rust binary with no Qt,
+Python or libVLC runtime.
 
-The existing Lumen release remains the reference application. This preview covers
-playback and streams, and is not yet a feature-complete replacement. No performance
-superiority is claimed.
+This is an early release: playback and streams are covered, and the remaining features
+are listed in [docs/migration.md](docs/migration.md). No performance claims are made.
 
 ## Working today
 
@@ -42,7 +41,7 @@ superiority is claimed.
 - [SponsorBlock](https://sponsor.ajay.app): sponsor reads, self-promotion and subscribe
   reminders in YouTube videos are skipped (intros and outros optionally).
 - An "Open network stream" dialog (Ctrl+L) for HTTP, HTTPS, RTSP, RTMP, UDP and RTP links.
-- Its own profile in `~/.config/lumen-rs`; the Python version's settings are never read or changed.
+- Its own profile in `~/.config/lumen-rs`.
 
 ## Not yet
 
