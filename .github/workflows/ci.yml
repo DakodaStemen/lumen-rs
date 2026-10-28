@@ -2,16 +2,56 @@ name: Rust
 on: [push, pull_request]
 permissions:
   contents: read
+env:
+  APT_DEPS: libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev ffmpeg streamlink
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: 1.99.1
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev ffmpeg streamlink
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: sudo apt-get update && sudo apt-get install -y $APT_DEPS
+      - name: Log mpv version
+        run: pkg-config --modversion mpv
+      - run: rustc --version && cargo --version
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: sudo apt-get update && sudo apt-get install -y $APT_DEPS
+      - run: cargo +1.88 check --locked
+
+  stable-floating:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: sudo apt-get update && sudo apt-get install -y $APT_DEPS
+      - run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - run: cargo +stable test --locked
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
