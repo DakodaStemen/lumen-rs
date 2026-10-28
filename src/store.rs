@@ -103,12 +103,7 @@ impl Store {
     }
 
     pub fn default_dir() -> PathBuf {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join("lumen-rs")
+        crate::platform::config_dir()
     }
 
     fn file_key(source: &str) -> String {

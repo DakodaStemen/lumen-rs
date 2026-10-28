@@ -72,9 +72,7 @@ impl Engine {
     pub fn new(output: Output, volume: u32) -> Result<Self> {
         // mpv refuses to start unless numbers are parsed with the C locale.
         static LOCALE: Once = Once::new();
-        LOCALE.call_once(|| unsafe {
-            libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
-        });
+        LOCALE.call_once(crate::platform::set_c_numeric_locale);
         let mpv = Mpv::with_initializer(|init| {
             match output {
                 Output::Window => init.set_property("vo", "libmpv")?,

@@ -1,0 +1,78 @@
+name: Package
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+      - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev libfuse2 patchelf
+      - run: cargo install cargo-packager cargo-generate-rpm --locked
+      - run: cargo packager --release --formats deb,appimage
+      - run: cargo build --release --locked && cargo generate-rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            target/generate-rpm/*.rpm
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+      - run: |
+          brew install mpv dylibbundler
+          echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+      - run: cargo install cargo-packager --locked
+      - run: cargo packager --release --formats app
+      - name: Bundle libmpv into the app
+        run: |
+          app=$(ls -d dist/*.app | head -1)
+          dylibbundler -od -b -x "$app/Contents/MacOS/lumen-rs" -d "$app/Contents/Frameworks" -p @executable_path/../Frameworks
+          hdiutil create -volname Lumen -srcfolder "$app" -ov -format UDZO dist/Lumen.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/Lumen.dmg
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+      - name: libmpv
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/windows-libmpv.ps1
+      - run: cargo install cargo-packager --locked
+      - run: cargo build --release --locked
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist/lumen-rs | Out-Null
+          Copy-Item target/release/lumen-rs.exe, "$env:LUMEN_LIBMPV_DIR/libmpv-2.dll", LICENSE, THIRD_PARTY_NOTICES.md dist/lumen-rs
+          Compress-Archive dist/lumen-rs dist/lumen-rs-windows-x64.zip
+      - name: MSI
+        shell: pwsh
+        run: |
+          cargo packager --release --formats wix
+          Get-ChildItem dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*.msi

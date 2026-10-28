@@ -3,7 +3,7 @@
 //! A `Session` owns everything except the window, so it runs the same with or without a UI.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::clock::clock;
@@ -540,11 +540,7 @@ impl Session {
             self.flash("No video to capture");
             return;
         }
-        let folder = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-            .join("Pictures")
-            .join("Lumen");
+        let folder = crate::platform::screenshot_dir();
         let _ = std::fs::create_dir_all(&folder);
         let target = folder.join(format!(
             "{}-{}.png",

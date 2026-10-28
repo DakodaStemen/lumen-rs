@@ -4,6 +4,9 @@
 //! Streamlink failure cases use small fake programs. The relay test uses the real `streamlink`
 //! and is skipped when it is not installed.
 
+// The fake yt-dlp/Streamlink programs are POSIX shell scripts, so these tests run on Unix only.
+#![cfg(unix)]
+
 mod common;
 
 use std::io::{Read, Write};
