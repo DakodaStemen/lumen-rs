@@ -14,6 +14,8 @@
 - Escape closes the top-most dialog before it acts as a shortcut.
 - A hint when yt-dlp and Streamlink are missing for a site link.
 - Interface tests that click and type through the real interface without a window.
+- A demo GIF recorded from the real player, and the recorder (`scripts/record-demo.sh`).
+- The welcome text no longer shows through the drop hint while files hover over the window.
 
 ## 0.2.0 — Streams
 

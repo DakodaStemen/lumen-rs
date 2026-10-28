@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Button, RichText, Ui};
 
-use super::{Frontend, PrefsTab, always_on_top_supported};
+use super::{Frontend, PrefsTab, always_on_top_supported, geometry};
 use crate::clock::clock;
 use crate::engine::TrackKind;
 use crate::keys::Action;
@@ -10,7 +10,9 @@ use crate::queue::title_of;
 
 /// A plain entry that closes the menu when clicked.
 fn plain(ui: &mut Ui, label: &str) -> bool {
-    let clicked = ui.add(Button::new(label)).clicked();
+    let response = ui.add(Button::new(label));
+    geometry::note(ui.ctx(), label, response.rect);
+    let clicked = response.clicked();
     if clicked {
         ui.close();
     }
@@ -19,7 +21,9 @@ fn plain(ui: &mut Ui, label: &str) -> bool {
 
 /// An entry that shows whether it is the current choice.
 fn choice(ui: &mut Ui, label: &str, selected: bool) -> bool {
-    let clicked = ui.add(Button::new(label).selected(selected)).clicked();
+    let response = ui.add(Button::new(label).selected(selected));
+    geometry::note(ui.ctx(), label, response.rect);
+    let clicked = response.clicked();
     if clicked {
         ui.close();
     }
@@ -28,6 +32,12 @@ fn choice(ui: &mut Ui, label: &str, selected: bool) -> bool {
 
 fn disabled(ui: &mut Ui, label: &str) {
     ui.add_enabled(false, Button::new(label));
+}
+
+/// A submenu button, remembering where it was drawn.
+fn submenu<R>(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui) -> R) {
+    let response = ui.menu_button(label, content).response;
+    geometry::note(ui.ctx(), label, response.rect);
 }
 
 impl Frontend {
@@ -45,7 +55,9 @@ impl Frontend {
         if !hint.is_empty() {
             button = button.shortcut_text(hint);
         }
-        if ui.add(button).clicked() {
+        let response = ui.add(button);
+        geometry::note(ui.ctx(), label, response.rect);
+        if response.clicked() {
             ui.close();
             self.perform(ctx, action);
         }
@@ -56,7 +68,7 @@ impl Frontend {
         let subtitles = self.session.engine.tracks(TrackKind::Subtitle);
         ui.set_min_width(200.0);
 
-        ui.menu_button("Audio track", |ui| {
+        submenu(ui, "Audio track", |ui| {
             if audio.is_empty() {
                 disabled(ui, "No tracks available");
             }
@@ -70,7 +82,7 @@ impl Frontend {
                 self.entry(ui, ctx, "Next audio track", Action::CycleAudio, false);
             }
         });
-        ui.menu_button("Subtitles", |ui| {
+        submenu(ui, "Subtitles", |ui| {
             if choice(ui, "Off", !subtitles.iter().any(|t| t.selected)) {
                 self.session.select_track(TrackKind::Subtitle, None);
             }
@@ -86,7 +98,7 @@ impl Frontend {
                     .open_subtitle(ctx, &self.session.store.settings.last_dir);
             }
         });
-        ui.menu_button("Sync", |ui| {
+        submenu(ui, "Sync", |ui| {
             let has_media = self.session.queue.current.is_some();
             let audio_delay = self.session.engine.delay_ms(TrackKind::Audio);
             let subtitle_delay = self.session.engine.delay_ms(TrackKind::Subtitle);
@@ -110,7 +122,7 @@ impl Frontend {
 
     pub(super) fn video_menu(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         ui.set_min_width(200.0);
-        ui.menu_button("Chapters", |ui| {
+        submenu(ui, "Chapters", |ui| {
             let chapters = self.chapters.clone();
             let now = self.session.current_chapter();
             if chapters.is_empty() {
@@ -138,7 +150,7 @@ impl Frontend {
         });
         let qualities = self.session.stream_qualities();
         if !qualities.is_empty() {
-            ui.menu_button("Stream quality", |ui| {
+            submenu(ui, "Stream quality", |ui| {
                 let current = self.session.stream_quality();
                 for quality in &qualities {
                     if choice(ui, quality, *quality == current) {
@@ -147,7 +159,7 @@ impl Frontend {
                 }
             });
         }
-        ui.menu_button("Frame", |ui| {
+        submenu(ui, "Frame", |ui| {
             self.entry(ui, ctx, "Next frame", Action::Frame, false);
             self.entry(ui, ctx, "Previous frame", Action::FrameBack, false);
         });
@@ -176,7 +188,7 @@ impl Frontend {
     pub(super) fn more_menu(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         ui.set_min_width(220.0);
         self.entry(ui, ctx, "Stop", Action::Stop, false);
-        ui.menu_button("Open recent", |ui| {
+        submenu(ui, "Open recent", |ui| {
             let recent = self.session.store.settings.recent.clone();
             if recent.is_empty() {
                 disabled(ui, "Nothing yet");
@@ -198,7 +210,7 @@ impl Frontend {
                 }
             }
         });
-        ui.menu_button("Bookmarks", |ui| {
+        submenu(ui, "Bookmarks", |ui| {
             let has_media = self.session.queue.current.is_some();
             ui.add_enabled_ui(has_media, |ui| {
                 self.entry(ui, ctx, "Add bookmark here", Action::Bookmark, false)

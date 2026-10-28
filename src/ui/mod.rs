@@ -5,6 +5,7 @@
 
 mod bar;
 mod dialogs;
+pub mod geometry;
 mod menus;
 pub mod picker;
 pub mod theme;
@@ -544,6 +545,7 @@ impl Frontend {
                     let selected = self.selected == Some(index);
                     let (rect, row) = ui
                         .allocate_exact_size(Vec2::new(ui.available_width(), 38.0), Sense::click());
+                    geometry::note(ui.ctx(), &item.title, rect);
                     let fill = if current || selected {
                         theme::SELECTED_BG
                     } else if row.hovered() {
@@ -629,6 +631,7 @@ impl Frontend {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(6), Color32::BLACK);
         let inner = rect.shrink(1.0);
+        geometry::note(ui.ctx(), "Video area", inner);
         surface.paint(ui, inner);
         self.video_interaction(ui, inner, false);
         self.video_overlays(ui, inner);
@@ -670,9 +673,13 @@ impl Frontend {
                 });
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.menu_button(RichText::new("…").strong(), |ui| self.more_menu(ui, &ctx));
-                ui.menu_button("Video", |ui| self.video_menu(ui, &ctx));
-                ui.menu_button("Audio & subtitles", |ui| self.audio_menu(ui, &ctx));
+                let more =
+                    ui.menu_button(RichText::new("…").strong(), |ui| self.more_menu(ui, &ctx));
+                geometry::note(&ctx, "…", more.response.rect);
+                let video = ui.menu_button("Video", |ui| self.video_menu(ui, &ctx));
+                geometry::note(&ctx, "Video", video.response.rect);
+                let audio = ui.menu_button("Audio & subtitles", |ui| self.audio_menu(ui, &ctx));
+                geometry::note(&ctx, "Audio & subtitles", audio.response.rect);
             });
         });
     }
@@ -708,7 +715,7 @@ impl Frontend {
     fn video_overlays(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         let current = self.session.queue.current.is_some();
         let state = self.session.state();
-        if !current {
+        if !current && !self.dropping {
             self.empty_state(ui, rect);
         } else if self.session.streams.activity().is_some()
             || matches!(state, State::Opening | State::Buffering)
@@ -872,6 +879,7 @@ impl Frontend {
                     band,
                 },
             );
+            geometry::note(ui.ctx(), "Seek bar", output.response.rect);
             if output.pressed {
                 self.scrubbing = output.pointer;
             }
@@ -978,6 +986,7 @@ impl Frontend {
                         band: None,
                     },
                 );
+                geometry::note(ui.ctx(), "Volume bar", output.response.rect);
                 if let (true, Some(value)) = (output.pressed || output.released, output.pointer) {
                     self.session
                         .set_volume((value * 200.0 / 5.0).round() as u32 * 5);
@@ -995,7 +1004,7 @@ impl Frontend {
     fn speed_menu(&mut self, ui: &mut egui::Ui) {
         let rate = self.session.rate();
         let mut chosen = None;
-        egui::ComboBox::from_id_salt("speed")
+        let combo = egui::ComboBox::from_id_salt("speed")
             .width(70.0)
             .selected_text(format!("{rate}×"))
             .show_ui(ui, |ui| {
@@ -1008,6 +1017,7 @@ impl Frontend {
                     }
                 }
             });
+        geometry::note(ui.ctx(), "Speed", combo.response.rect);
         if let Some(rate) = chosen {
             self.session.set_rate(rate);
         }

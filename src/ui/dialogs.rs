@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Align2, Color32, RichText, Vec2};
 
-use super::{Frontend, PrefsTab, UrlDialog, theme};
+use super::{Frontend, PrefsTab, UrlDialog, geometry, theme};
 use crate::keys::{self, Action, binding_text};
 use crate::streams::is_network_url;
 
@@ -94,7 +94,8 @@ impl Frontend {
                     (PrefsTab::Streams, "Streams"),
                     (PrefsTab::Keys, "Keyboard"),
                 ] {
-                    ui.selectable_value(&mut state.tab, tab, label);
+                    let response = ui.selectable_value(&mut state.tab, tab, label);
+                    geometry::note(ctx, label, response.rect);
                 }
             });
             ui.separator();
@@ -197,6 +198,11 @@ impl Frontend {
                                                 .selected(capturing)
                                                 .min_size(Vec2::new(150.0, 28.0));
                                         let key_button = ui.add(button);
+                                        geometry::note(
+                                            ctx,
+                                            &format!("Shortcut for {}", action.label()),
+                                            key_button.rect,
+                                        );
                                         key_button.widget_info(|| {
                                             egui::WidgetInfo::labeled(
                                                 egui::WidgetType::Button,

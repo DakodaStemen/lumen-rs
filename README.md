@@ -1,7 +1,7 @@
 <h1 align="center">Lumen · Rust</h1>
 <p align="center"><strong>Every format. Every frame. In a better light.</strong><br>A native media player, built in Rust on libmpv.</p>
 
-<p align="center"><img src="docs/player.png" width="100%" alt="Lumen Rust playing a test pattern with the play queue open"></p>
+<p align="center"><img src="docs/demo.gif" width="100%" alt="A tour of Lumen Rust: dropping files, seeking with a hover preview, subtitles, chapters, speed, an A-B loop, the queue and key rebinding"></p>
 
 **An early, working native rewrite of [Lumen](https://github.com/DakodaStemen/lumen).**
 This repository is independent of the Python version. It uses egui/eframe for the
@@ -115,6 +115,13 @@ contributors (CC BY-NC-SA 4.0).
 
 Settings in `settings.json`: `stream_quality` (`"best"`, or a name such as `"720p60"`),
 `low_latency` (Twitch and Kick), `sponsorblock`, and `sponsorblock_intros`.
+
+## The demo
+
+`docs/demo.gif` is recorded from the real player, not mocked up. `scripts/record-demo.sh` makes
+a few silent clips (generated pictures with no audio stream), plays a scripted tour in a real
+window with injected mouse and key input, and encodes the frames. It needs ffmpeg and a desktop
+session, and the player runs muted. Rerun it after changing the interface.
 
 ## Project layout
 

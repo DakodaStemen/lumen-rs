@@ -97,6 +97,7 @@ pub fn primary(ui: &mut Ui, text: &str, width: Option<f32>) -> Response {
         .corner_radius(RADIUS);
     button = button.min_size(Vec2::new(width.unwrap_or(0.0), BUTTON_HEIGHT));
     let response = ui.add(button);
+    super::geometry::note(ui.ctx(), text, response.rect);
     if response.hovered() {
         ui.painter()
             .rect_filled(response.rect, CornerRadius::same(RADIUS), ACCENT_HOVER);
@@ -113,7 +114,10 @@ pub fn primary(ui: &mut Ui, text: &str, width: Option<f32>) -> Response {
 
 /// A full-width secondary button.
 pub fn wide(ui: &mut Ui, text: &str) -> Response {
-    ui.add(Button::new(text).min_size(Vec2::new(ui.available_width(), BUTTON_HEIGHT)))
+    let response =
+        ui.add(Button::new(text).min_size(Vec2::new(ui.available_width(), BUTTON_HEIGHT)));
+    super::geometry::note(ui.ctx(), text, response.rect);
+    response
 }
 
 /// A square button with a glyph, named for screen readers and as a tooltip.
@@ -140,6 +144,7 @@ pub fn toggle(ui: &mut Ui, glyph: &str, name: &str, on: bool) -> Response {
 
 /// Gives a widget an accessible name and the same text as a tooltip.
 pub fn named(response: Response, name: &str) -> Response {
+    super::geometry::note(&response.ctx, name, response.rect);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
     response.on_hover_text(name)
 }

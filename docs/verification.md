@@ -12,6 +12,12 @@ What has been run, and what has not.
   shuffle and repeat, pausing by button and key, file-dialog results, menus (audio tracks,
   chapters, media information), Preferences, rebinding a key and then using it, Escape handling,
   the mini player, the sidebar toggle, double-clicking a queue row, and a range of window sizes.
+- A scripted tour recorded in the real window on Wayland (`docs/demo.gif`, made by
+  `scripts/record-demo.sh`; silent, as its clips have no audio). The frames were reviewed: the welcome
+  screen with recent files, the drop hint, queue filling and playback, the seek bar's hover time and
+  chapter name, the Audio & subtitles menu with subtitles appearing, the Video and … menus,
+  chapter jumps, speed, the A-B loop, switching queue items, and Preferences on the keyboard tab.
+  The recording also showed, and fixed, welcome text showing through the drop hint.
 - Stream tests: the real Streamlink relays a local HLS stream, restarts at another quality and
   shuts down cleanly; fake yt-dlp and Streamlink programs cover resolution, separate audio,
   failures, fall-backs and results from a replaced lookup. No internet is needed.
@@ -37,8 +43,8 @@ What has been run, and what has not.
   and fullscreen. The actions behind them are tested.
 - The native file dialogs (Open media, Load subtitle, Save queue), which need a desktop portal.
 - The mini player's window resize, and fullscreen's auto-hiding controls and hidden cursor.
-- How the interface looks in states other than playing; one real-window screenshot was taken of the
-  playing state. The README screenshot predates the redesign.
+- How the interface looks in fullscreen, the mini player, Media information, the Streams tab and
+  the link dialog; the recording does not show them.
 - X11 sessions, other desktops and other GPUs.
 - mpv older than 0.41. The `loadfile` call has a separate path for mpv before 0.38; only
   its version check is unit-tested, and it is unknown whether CI exercised it.

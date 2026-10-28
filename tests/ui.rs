@@ -601,3 +601,77 @@ fn the_layout_survives_odd_window_sizes_and_states() {
         pass_time(&mut h, 100);
     }
 }
+
+#[test]
+fn the_welcome_content_steps_aside_while_files_hover_over_the_window() {
+    let Some(_fx) = fixture() else { return };
+    let mut h = harness(quiet_session());
+    h.get_by_label("Drop media here");
+    h.input_mut().hovered_files = vec![egui::HoveredFile {
+        path: Some("/tmp/a.mp4".into()),
+        mime: String::new(),
+    }];
+    h.step();
+    assert!(
+        h.query_by_label("Drop media here").is_none(),
+        "the drop hint must not be drawn over the welcome text"
+    );
+    h.input_mut().hovered_files.clear();
+    h.run_steps(2);
+    h.get_by_label("Drop media here");
+}
+
+/// The demo recorder (`examples/demo.rs`) aims at these widgets by name. Renaming one would
+/// quietly break the recording, so this keeps the names honest.
+#[test]
+fn the_widgets_the_demo_recorder_aims_at_report_where_they_are() {
+    use lumen_rs::ui::geometry::find;
+    let Some(fx) = fixture() else { return };
+    let mut h = harness(quiet_session());
+    h.state_mut()
+        .front()
+        .session
+        .add(&[fx.path("tracks.mkv"), fx.path("show/ep1.mp4")], true);
+    assert!(wait(&mut h.state_mut().front().session, 8, |s| s.state()
+        == State::Playing));
+    pass_time(&mut h, 600);
+    let ctx = h.ctx.clone();
+    for name in [
+        "Seek bar",
+        "Volume bar",
+        "Speed",
+        "Video area",
+        "Audio & subtitles",
+        "Video",
+        "…",
+        "tracks.mkv",
+        "ep1.mp4",
+    ] {
+        let rect =
+            find(&ctx, name).unwrap_or_else(|| panic!("{name:?} did not report its position"));
+        assert!(
+            rect.width() > 0.0 && rect.height() > 0.0,
+            "{name:?} has no size"
+        );
+    }
+
+    // Menu entries report themselves only while open.
+    h.get_by_label("Video").click();
+    settle(&mut h);
+    for name in ["Chapters", "Frame", "Take screenshot", "Fullscreen"] {
+        assert!(
+            find(&ctx, name).is_some(),
+            "{name:?} did not report its position"
+        );
+    }
+    h.key_press(Key::Escape);
+    settle(&mut h);
+    h.get_by_label("…").click();
+    settle(&mut h);
+    for name in ["Preferences…", "Media information", "Keyboard shortcuts"] {
+        assert!(
+            find(&ctx, name).is_some(),
+            "{name:?} did not report its position"
+        );
+    }
+}
