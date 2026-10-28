@@ -11,6 +11,9 @@ What has been run, and what has not.
   upright with the controls, queue and status line around it, and playback advancing.
   Frames were also checked by reading the render target back from the GPU.
 
+- CI on Ubuntu (libmpv-dev, ffmpeg): format, Clippy and all tests passed on the first push.
+  The runner's mpv version was not recorded.
+
 ## Not verified
 
 - Audio output, hardware decoding and long-running playback.
@@ -18,5 +21,4 @@ What has been run, and what has not.
   keyboard shortcuts in the real window. The actions behind them are tested.
 - X11 sessions, other desktops and other GPUs.
 - mpv older than 0.41. The `loadfile` call has a separate path for mpv before 0.38; only
-  its version check is unit-tested.
-- The CI workflow has not run yet.
+  its version check is unit-tested, and it is unknown whether CI exercised it.
