@@ -1,0 +1,566 @@
+//! Lumen's player logic: queue playback, resume, per-file memory, A-B loop, tracks and sync.
+//!
+//! A `Session` owns everything except the window, so it runs the same with or without a UI.
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use crate::clock::clock;
+use crate::engine::{Engine, TrackKind};
+use crate::keys::{Action, binding_text};
+use crate::queue::{Queue, is_url};
+use crate::store::{FileState, Store};
+
+pub const RATES: [f64; 10] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0];
+const SAVE_INTERVAL: Duration = Duration::from_secs(5);
+const FLASH_FOR: Duration = Duration::from_millis(2500);
+/// Resuming is skipped for the first seconds and the last stretch of a file.
+const RESUME_AFTER_MS: i64 = 5_000;
+const RESUME_BEFORE_END_MS: i64 = 15_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Idle,
+    Opening,
+    Buffering,
+    Playing,
+    Paused,
+    Ended,
+}
+
+pub struct Session {
+    pub engine: Engine,
+    pub store: Store,
+    pub queue: Queue,
+    loop_a: Option<i64>,
+    loop_b: Option<i64>,
+    rate: f64,
+    finished: bool,
+    was_started: bool,
+    /// Set from the moment a file is loaded until its saved choices are re-applied.
+    restore_pending: bool,
+    last_save: Instant,
+    flash: Option<(String, Instant)>,
+}
+
+impl Session {
+    pub fn new(engine: Engine, store: Store) -> Self {
+        Self {
+            engine,
+            store,
+            queue: Queue::default(),
+            loop_a: None,
+            loop_b: None,
+            rate: 1.0,
+            finished: false,
+            was_started: false,
+            restore_pending: false,
+            last_save: Instant::now(),
+            flash: None,
+        }
+    }
+
+    // ----- queue -----
+
+    /// Appends sources and, when `autoplay` is set, starts the first one added.
+    pub fn add(&mut self, sources: &[String], autoplay: bool) {
+        if let Some(first) = self.queue.add(sources)
+            && autoplay
+        {
+            self.play_index(first, None, false);
+        }
+    }
+
+    pub fn source(&self) -> Option<String> {
+        self.queue.current_source().map(str::to_owned)
+    }
+
+    pub fn remove(&mut self, index: usize) {
+        let removing_current = self.queue.current == Some(index);
+        self.queue.remove(index);
+        if removing_current {
+            self.finished = true; // nothing left to save progress for
+            self.engine.stop();
+        }
+    }
+
+    /// Plays the item `delta` places away, or does nothing at the end of the queue.
+    pub fn advance(&mut self, delta: i64) {
+        let folder_next = self.store.settings.auto_next_folder;
+        if let Some(index) = self.queue.advance(delta, folder_next) {
+            self.play_index(index, None, false);
+        }
+    }
+
+    // ----- playback -----
+
+    pub fn play_index(&mut self, index: usize, start_ms: Option<i64>, paused: bool) {
+        let Some(source) = self.queue.source(index).map(str::to_owned) else {
+            return;
+        };
+        if self.queue.current.is_some() && !self.finished {
+            self.save_position(false);
+        }
+        self.engine.stop();
+        self.queue.current = Some(index);
+        self.finished = false;
+        self.was_started = false;
+        self.clear_loop();
+        self.store.remember_recent(&source);
+
+        let start = start_ms.or_else(|| self.resume_point(&source));
+        if start_ms.is_none()
+            && let Some(position) = start
+        {
+            let key = binding_text(&self.store.settings.keys, Action::Restart);
+            self.flash(&format!(
+                "Resumed at {}  ·  press {key} to start over",
+                clock(position)
+            ));
+        }
+        self.restore_pending = true;
+        if !self
+            .engine
+            .load(&source, start.map(|ms| ms as f64 / 1000.0), paused)
+        {
+            self.flash("Unable to open media. Check the file or stream.");
+        }
+        self.engine.set_speed(self.rate);
+    }
+
+    fn resume_point(&self, source: &str) -> Option<i64> {
+        if !self.store.settings.resume {
+            return None;
+        }
+        let state = self.store.file_state(source);
+        let near_end = state.length > 0 && state.position >= state.length - RESUME_BEFORE_END_MS;
+        (state.position > RESUME_AFTER_MS && !near_end).then_some(state.position)
+    }
+
+    pub fn state(&self) -> State {
+        if self.engine.idle() {
+            State::Idle
+        } else if self.engine.at_end() {
+            State::Ended
+        } else if self.engine.position_ms().is_none() {
+            State::Opening
+        } else if self.engine.buffering() {
+            State::Buffering
+        } else if self.engine.paused() {
+            State::Paused
+        } else {
+            State::Playing
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        match (self.queue.current, self.state()) {
+            (None, _) if self.queue.items.is_empty() => {}
+            (None, _) => self.play_index(0, None, false),
+            (Some(current), State::Idle | State::Ended) => self.play_index(current, None, false),
+            _ => self.engine.set_paused(!self.engine.paused()),
+        }
+    }
+
+    pub fn stop(&mut self) {
+        if self.queue.current.is_some() {
+            self.save_position(false);
+        }
+        self.engine.stop();
+    }
+
+    /// Call regularly (Lumen does so every 200 ms). Drives resume, autosave and auto-advance.
+    pub fn tick(&mut self) {
+        let state = self.state();
+        if state == State::Playing {
+            self.was_started = true;
+        }
+        if matches!(state, State::Playing | State::Paused) {
+            if self.restore_pending && self.position_ms() > 0 {
+                self.restore_pending = false;
+                self.restore_file_settings();
+            }
+            if state == State::Playing && self.last_save.elapsed() > SAVE_INTERVAL {
+                self.save_position(false);
+            }
+        }
+        if state == State::Ended && !self.finished {
+            self.finished = true;
+            self.save_position(true);
+            self.advance(1);
+        }
+    }
+
+    /// Re-applies the choices remembered for this file once mpv has published its tracks.
+    fn restore_file_settings(&mut self) {
+        let Some(source) = self.source() else { return };
+        let state = self.store.file_state(&source);
+        let remember = self.store.settings.remember_tracks;
+        if remember {
+            if let Some(id) = state.audio
+                && self
+                    .engine
+                    .tracks(TrackKind::Audio)
+                    .iter()
+                    .any(|t| t.id == id)
+            {
+                self.engine.select_track(TrackKind::Audio, Some(id));
+            }
+            match state.spu {
+                Some(id) if id < 0 => self.engine.select_track(TrackKind::Subtitle, None),
+                Some(id)
+                    if self
+                        .engine
+                        .tracks(TrackKind::Subtitle)
+                        .iter()
+                        .any(|t| t.id == id) =>
+                {
+                    self.engine.select_track(TrackKind::Subtitle, Some(id));
+                }
+                _ => {}
+            }
+        }
+        self.engine.set_delay_ms(
+            TrackKind::Audio,
+            if remember { state.audio_delay } else { 0 },
+        );
+        self.engine.set_delay_ms(
+            TrackKind::Subtitle,
+            if remember { state.spu_delay } else { 0 },
+        );
+        for subtitle in state.subtitles.iter().filter(|s| Path::new(s).is_file()) {
+            self.engine.add_subtitle(subtitle);
+        }
+    }
+
+    pub fn save_position(&mut self, finished: bool) {
+        let Some(source) = self.source() else { return };
+        let Some(length) = self.engine.duration_ms().filter(|l| *l > 0) else {
+            return; // live streams have no position worth resuming
+        };
+        if !self.was_started {
+            return;
+        }
+        self.last_save = Instant::now();
+        let mut state = self.store.file_state(&source);
+        state.position = if finished { 0 } else { self.position_ms() };
+        state.length = length;
+        if self.store.settings.remember_tracks && !self.restore_pending {
+            state.audio = self.engine.selected_track(TrackKind::Audio);
+            state.spu = Some(
+                self.engine
+                    .selected_track(TrackKind::Subtitle)
+                    .unwrap_or(-1),
+            );
+            state.audio_delay = self.engine.delay_ms(TrackKind::Audio);
+            state.spu_delay = self.engine.delay_ms(TrackKind::Subtitle);
+        }
+        self.store.save_file_state(&source, state);
+    }
+
+    // ----- seeking -----
+
+    pub fn position_ms(&self) -> i64 {
+        self.engine.position_ms().unwrap_or(0).max(0)
+    }
+
+    pub fn seek_ms(&mut self, ms: i64) {
+        if self.engine.seekable() {
+            self.engine.seek_to_ms(ms.max(0));
+        }
+    }
+
+    pub fn skip(&mut self, ms: i64) {
+        if self.engine.seekable() {
+            self.seek_ms(self.position_ms() + ms);
+        }
+    }
+
+    pub fn seek_step_ms(&self) -> i64 {
+        i64::from(self.store.settings.seek_step) * 1000
+    }
+
+    pub fn restart(&mut self) {
+        self.seek_ms(0);
+    }
+
+    // ----- sound -----
+
+    pub fn set_volume(&mut self, volume: u32) {
+        let volume = volume.min(200);
+        self.engine.set_volume(volume);
+        if self.store.settings.volume != volume {
+            self.store.settings.volume = volume;
+            self.store.save_settings();
+        }
+    }
+
+    pub fn change_volume(&mut self, delta: i32) {
+        let volume = (self.store.settings.volume as i32 + delta).clamp(0, 200) as u32;
+        self.set_volume(volume);
+        self.flash(&format!("Volume {volume}%"));
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.engine.set_muted(!self.engine.muted());
+    }
+
+    pub fn rate(&self) -> f64 {
+        self.rate
+    }
+
+    pub fn set_rate(&mut self, rate: f64) {
+        let nearest = RATES
+            .iter()
+            .copied()
+            .min_by(|a, b| (a - rate).abs().total_cmp(&(b - rate).abs()))
+            .unwrap_or(1.0);
+        self.rate = nearest;
+        self.engine.set_speed(nearest);
+        self.flash(&format!("Speed {nearest}×"));
+    }
+
+    pub fn step_rate(&mut self, delta: i32) {
+        let current = RATES.iter().position(|r| *r == self.rate).unwrap_or(3) as i32;
+        let next = (current + delta).clamp(0, RATES.len() as i32 - 1) as usize;
+        self.set_rate(RATES[next]);
+    }
+
+    /// Nudges audio or subtitle timing. Returns nothing when no file is queued.
+    pub fn shift_delay(&mut self, kind: TrackKind, ms: i64) {
+        if self.queue.current.is_none() {
+            return;
+        }
+        let value = self.engine.delay_ms(kind) + ms;
+        self.engine.set_delay_ms(kind, value);
+        let name = if kind == TrackKind::Audio {
+            "Audio"
+        } else {
+            "Subtitle"
+        };
+        self.flash(&format!("{name} delay {value:+} ms"));
+        self.save_position(false);
+    }
+
+    /// Switches to the next audio track; subtitles also cycle through "off".
+    pub fn cycle_track(&mut self, kind: TrackKind) {
+        let tracks = self.engine.tracks(kind);
+        if tracks.is_empty() {
+            self.flash("No tracks to switch");
+            return;
+        }
+        let current = self.engine.selected_track(kind);
+        let position = tracks.iter().position(|t| Some(t.id) == current);
+        let slots = tracks.len() + usize::from(kind == TrackKind::Subtitle);
+        let next = position.map_or(0, |p| (p + 1) % slots);
+        let (id, label) = match tracks.get(next) {
+            Some(track) => (Some(track.id), track.label.clone()),
+            None => (None, "Off".to_owned()),
+        };
+        self.engine.select_track(kind, id);
+        let name = if kind == TrackKind::Audio {
+            "Audio"
+        } else {
+            "Subtitles"
+        };
+        self.flash(&format!("{name}: {label}"));
+        self.save_position(false);
+    }
+
+    // ----- navigation -----
+
+    pub fn frame_forward(&mut self) {
+        if self.queue.current.is_some() {
+            self.engine.frame_step();
+            self.flash("Next frame");
+        }
+    }
+
+    pub fn frame_back(&mut self) {
+        if self.queue.current.is_some() && self.engine.seekable() {
+            self.engine.frame_back_step();
+            self.flash("Previous frame");
+        }
+    }
+
+    pub fn chapter(&mut self, delta: i64) {
+        if self.engine.chapter_count() > 0 {
+            self.engine.chapter_step(delta);
+            self.flash(if delta > 0 {
+                "Next chapter"
+            } else {
+                "Previous chapter"
+            });
+        } else {
+            self.flash("No chapters");
+        }
+    }
+
+    pub fn loop_points(&self) -> (Option<i64>, Option<i64>) {
+        (self.loop_a, self.loop_b)
+    }
+
+    pub fn set_loop(&mut self, a: Option<i64>, b: Option<i64>) {
+        self.loop_a = a;
+        self.loop_b = b;
+        self.engine.set_loop_ms(a, b);
+    }
+
+    fn clear_loop(&mut self) {
+        self.set_loop(None, None);
+    }
+
+    /// Cycles through setting the loop start, the loop end, and clearing both.
+    pub fn ab_loop(&mut self) {
+        if self.queue.current.is_none() {
+            return;
+        }
+        let now = self.position_ms();
+        match (self.loop_a, self.loop_b) {
+            (None, _) => {
+                self.set_loop(Some(now), None);
+                self.flash(&format!("Loop start {}", clock(now)));
+            }
+            (Some(a), None) if now > a => {
+                self.set_loop(Some(a), Some(now));
+                self.flash(&format!("Looping {} → {}", clock(a), clock(now)));
+            }
+            _ => {
+                self.clear_loop();
+                self.flash("Loop cleared");
+            }
+        }
+    }
+
+    pub fn add_bookmark(&mut self) {
+        let Some(source) = self.source() else { return };
+        let now = self.position_ms();
+        let mut state: FileState = self.store.file_state(&source);
+        state.bookmarks.push(now);
+        state.bookmarks.sort_unstable();
+        state.bookmarks.dedup();
+        self.store.save_file_state(&source, state);
+        self.flash(&format!("Bookmark at {}", clock(now)));
+    }
+
+    pub fn screenshot(&mut self) {
+        let Some(source) = self.source() else {
+            self.flash("No video to capture");
+            return;
+        };
+        if !self.engine.has_video() {
+            self.flash("No video to capture");
+            return;
+        }
+        let folder = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join("Pictures")
+            .join("Lumen");
+        let _ = std::fs::create_dir_all(&folder);
+        let target = folder.join(format!(
+            "{}-{}.png",
+            screenshot_stem(&source),
+            clock(self.position_ms()).replace(':', ".")
+        ));
+        if self.engine.screenshot(&target.to_string_lossy()) {
+            self.flash(&format!("Screenshot saved to {}", target.display()));
+        } else {
+            self.flash("Screenshot failed");
+        }
+    }
+
+    // ----- status -----
+
+    pub fn flash(&mut self, text: &str) {
+        let text = if text.chars().count() < 40 {
+            text.to_uppercase()
+        } else {
+            text.to_owned()
+        };
+        self.flash = Some((text, Instant::now() + FLASH_FOR));
+    }
+
+    /// The status line: a recent message if there is one, otherwise the playback state.
+    pub fn status(&self) -> String {
+        if let Some((text, until)) = &self.flash
+            && Instant::now() < *until
+        {
+            return text.clone();
+        }
+        if self.queue.current.is_none() {
+            return String::new();
+        }
+        let mut text = match self.state() {
+            State::Playing => "PLAYING",
+            State::Paused => "PAUSED",
+            State::Opening => "OPENING MEDIA…",
+            State::Buffering => "BUFFERING…",
+            State::Ended => "PLAYBACK FINISHED",
+            State::Idle => "READY",
+        }
+        .to_owned();
+        if let Some(a) = self.loop_a {
+            let b = self.loop_b.map_or("…".to_owned(), clock);
+            text += &format!("   ·   LOOP {} → {b}", clock(a));
+        }
+        text + "   /   mpv"
+    }
+}
+
+fn screenshot_stem(source: &str) -> String {
+    let name = if is_url(source) {
+        source
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(source)
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+    } else {
+        Path::new(source)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+    };
+    let name = name
+        .rsplit_once('.')
+        .filter(|_| is_url(source))
+        .map_or(name, |(stem, _)| stem);
+    let mut stem = String::new();
+    for c in name.chars() {
+        let keep = c.is_alphanumeric() || matches!(c, '_' | '.' | '-');
+        if keep {
+            stem.push(c);
+        } else if !stem.ends_with('_') {
+            stem.push('_');
+        }
+    }
+    let stem: String = stem.chars().take(60).collect();
+    if stem.is_empty() {
+        "frame".to_owned()
+    } else {
+        stem
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screenshot_names_are_filesystem_safe() {
+        assert_eq!(
+            screenshot_stem("/media/My Film (2020).mkv"),
+            "My_Film_2020_"
+        );
+        assert_eq!(screenshot_stem("https://x.test/v/clip.mp4?token=1"), "clip");
+        assert_eq!(
+            screenshot_stem("/media/.mkv"),
+            ".mkv",
+            "a hidden file keeps its name"
+        );
+        assert_eq!(screenshot_stem("https://x.test/"), "frame");
+        assert!(screenshot_stem(&"a".repeat(200)).len() <= 60);
+    }
+}
