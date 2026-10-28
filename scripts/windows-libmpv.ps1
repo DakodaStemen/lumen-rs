@@ -12,9 +12,8 @@ $asset = "mpv-dev-x86_64-$Tag-git-*.7z"
 gh release download $Tag --repo shinchiro/mpv-winbuild-cmake --pattern $asset --dir $Dest --clobber
 $archive = Get-ChildItem $Dest -Filter "mpv-dev-x86_64-*.7z" | Select-Object -First 1
 7z x -y "-o$Dest" $archive.FullName | Out-Null
-$def = Get-ChildItem $Dest -Recurse -Filter "mpv.def" | Select-Object -First 1
 $dll = Get-ChildItem $Dest -Recurse -Filter "libmpv-2.dll" | Select-Object -First 1
-if (-not $def -or -not $dll) { throw "mpv.def / libmpv-2.dll missing from $($archive.Name)" }
+if (-not $dll) { throw "libmpv-2.dll missing from $($archive.Name)" }
 # MSVC links against an import library; build one from the .def (exports are the same).
 $libexe = (Get-Command lib.exe -ErrorAction SilentlyContinue).Source
 if (-not $libexe) {
@@ -22,7 +21,15 @@ if (-not $libexe) {
   $libexe = & $vswhere -latest -find "VC\Tools\MSVC\**\bin\Hostx64\x64\lib.exe" | Select-Object -First 1
 }
 if (-not $libexe) { throw "lib.exe not found; install the MSVC build tools" }
-& $libexe /nologo /machine:x64 "/def:$($def.FullName)" "/out:$Dest\mpv.lib"
+# The archive only ships a MinGW libmpv.dll.a, so derive a .def from the DLL exports.
+$dumpbin = Join-Path (Split-Path $libexe) "dumpbin.exe"
+$names = & $dumpbin /nologo /exports $dll.FullName | ForEach-Object {
+  if ($_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]{8}\s+(\S+)') { $Matches[1] }
+}
+if (-not $names) { throw "no exports found in $($dll.Name)" }
+$def = Join-Path $Dest "mpv.def"
+@("LIBRARY libmpv-2", "EXPORTS") + $names | Set-Content -Encoding ascii $def
+& $libexe /nologo /machine:x64 "/def:$def" "/out:$Dest\mpv.lib"
 if ($LASTEXITCODE -ne 0) { throw "lib.exe failed" }
 Copy-Item $dll.FullName $Dest -Force
 if ($env:GITHUB_ENV) {

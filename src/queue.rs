@@ -333,7 +333,9 @@ mod tests {
     #[test]
     fn imports_m3u_relative_to_the_playlist_and_survives_cycles() {
         let dir = tempfile::tempdir().unwrap();
-        let list = dir.path().join("list.m3u");
+        // macOS temp dirs sit behind a /var -> /private/var symlink
+        let dir_path = fs::canonicalize(dir.path()).unwrap();
+        let list = dir_path.join("list.m3u");
         fs::write(
             &list,
             "#EXTM3U\nsong.mp3\nhttps://x.test/live.m3u8\n\nlist.m3u\n",
@@ -345,7 +347,7 @@ mod tests {
         assert_eq!(queue.items.len(), 2);
         assert_eq!(
             queue.items[0].source,
-            dir.path().join("song.mp3").to_string_lossy()
+            dir_path.join("song.mp3").to_string_lossy()
         );
         assert_eq!(queue.items[1].source, "https://x.test/live.m3u8");
     }
@@ -353,7 +355,9 @@ mod tests {
     #[test]
     fn playlist_files_only_queue_allowed_schemes() {
         let dir = tempfile::tempdir().unwrap();
-        let list = dir.path().join("evil.m3u");
+        // macOS temp dirs sit behind a /var -> /private/var symlink
+        let dir_path = fs::canonicalize(dir.path()).unwrap();
+        let list = dir_path.join("evil.m3u");
         fs::write(
             &list,
             "#EXTM3U\nsmb://host/share/x.mkv\nedl://%5%http://a;!new_stream\nlavfi://sine\n\
@@ -365,7 +369,7 @@ mod tests {
         let mut queue = Queue::default();
         queue.add(&[list.to_string_lossy().into_owned()]);
         let sources: Vec<&str> = queue.items.iter().map(|i| i.source.as_str()).collect();
-        let rel = dir.path().join("rel.mp3").to_string_lossy().into_owned();
+        let rel = dir_path.join("rel.mp3").to_string_lossy().into_owned();
         assert_eq!(
             sources,
             [
