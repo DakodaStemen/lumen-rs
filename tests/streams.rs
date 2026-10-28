@@ -32,9 +32,9 @@ fn serve(dir: PathBuf) -> u16 {
 }
 
 fn respond(mut stream: std::net::TcpStream, dir: &Path) {
-    let mut buffer = [0u8; 2048];
+    let mut buffer = [0u8; 4096];
     let n = stream.read(&mut buffer).unwrap_or(0);
-    let request = String::from_utf8_lossy(&buffer[..n]);
+    let request = String::from_utf8_lossy(&buffer[..n]).into_owned();
     let name = request
         .split_whitespace()
         .nth(1)
@@ -46,20 +46,41 @@ fn respond(mut stream: std::net::TcpStream, dir: &Path) {
     let body = (!name.contains(".."))
         .then(|| std::fs::read(dir.join(name)).ok())
         .flatten();
-    let kind = if name.ends_with(".m3u8") {
-        "application/vnd.apple.mpegurl"
-    } else {
-        "video/mp2t"
+    let kind = match name.rsplit('.').next().unwrap_or("") {
+        "m3u8" => "application/vnd.apple.mpegurl",
+        "mp4" => "video/mp4",
+        "m4a" => "audio/mp4",
+        _ => "video/mp2t",
     };
+    // mpv seeks inside MP4 files, so honour a `Range: bytes=start-[end]` header.
+    let range = request.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        let spec = key
+            .eq_ignore_ascii_case("range")
+            .then(|| value.trim().strip_prefix("bytes="))??;
+        let (start, end) = spec.split_once('-')?;
+        Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()))
+    });
     let _ = match body {
         Some(body) => {
+            let (status, slice, extra) = match range {
+                Some((start, end)) if start < body.len() => {
+                    let end = end.map_or(body.len() - 1, |e| e.min(body.len() - 1));
+                    (
+                        "206 Partial Content",
+                        &body[start..=end],
+                        format!("Content-Range: bytes {start}-{end}/{}\r\n", body.len()),
+                    )
+                }
+                _ => ("200 OK", &body[..], String::new()),
+            };
             let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
+                "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nAccept-Ranges: bytes\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                slice.len()
             );
             stream
                 .write_all(head.as_bytes())
-                .and_then(|_| stream.write_all(&body))
+                .and_then(|_| stream.write_all(slice))
         }
         None => stream
             .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
@@ -74,8 +95,10 @@ fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-fn file_url(path: &str) -> String {
-    format!("file://{path}")
+/// The URL of `name` under `fx` on a local server. yt-dlp output must be http(s), so file URLs won't do.
+fn http_url(fx: &common::Fixture, name: &str) -> String {
+    let port = serve(fx.root.clone());
+    format!("http://127.0.0.1:{port}/{name}")
 }
 
 /// A session with its own Streamlink and yt-dlp, and SponsorBlock off so nothing touches the network.
@@ -174,8 +197,8 @@ fn media_links_play_directly_without_streamlink() {
 fn ytdlp_resolves_separate_video_and_audio_streams() {
     let Some(fx) = fixture() else { return };
     let log = fx.path("ytdlp-args.txt");
-    let video = file_url(&fx.path("video_only.mp4"));
-    let audio = file_url(&fx.path("audio_only.m4a"));
+    let video = http_url(&fx, "video_only.mp4");
+    let audio = http_url(&fx, "audio_only.m4a");
     let ytdlp = script(
         &fx.root,
         "fake-ytdlp",
@@ -206,10 +229,7 @@ fn ytdlp_resolves_separate_video_and_audio_streams() {
         s.queue.items[0].title, "A Resolved Title",
         "the queue shows the video's title"
     );
-    assert_eq!(
-        s.engine.path().as_deref(),
-        Some(video.strip_prefix("file://").unwrap())
-    );
+    assert_eq!(s.engine.path().as_deref(), Some(video.as_str()));
     let audio_tracks = s.engine.tracks(TrackKind::Audio);
     assert_eq!(
         audio_tracks.len(),
@@ -222,6 +242,7 @@ fn ytdlp_resolves_separate_video_and_audio_streams() {
         "--no-playlist",
         "-f",
         "b/bv*+ba",
+        "--",
         "https://video.test/watch?v=abc123",
     ] {
         assert!(
@@ -303,7 +324,7 @@ fn other_streamlink_failures_fall_back_to_ytdlp() {
         "broken-streamlink",
         "echo 'error: Unable to open URL: x' >&2\nexit 1",
     );
-    let video = file_url(&fx.path("single/film.mp4"));
+    let video = http_url(&fx, "single/film.mp4");
     let ytdlp = script(
         &fx.root,
         "good-ytdlp",
@@ -328,7 +349,7 @@ fn other_streamlink_failures_fall_back_to_ytdlp() {
 #[test]
 fn a_slow_lookup_does_not_override_what_the_user_chose_next() {
     let Some(fx) = fixture() else { return };
-    let slow_video = file_url(&fx.path("single/film.mp4"));
+    let slow_video = http_url(&fx, "single/film.mp4");
     let ytdlp = script(
         &fx.root,
         "slow-ytdlp",

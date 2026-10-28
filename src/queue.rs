@@ -29,6 +29,21 @@ pub fn is_url(source: &str) -> bool {
     source.contains("://")
 }
 
+/// Schemes a playlist file may point at. Anything else with `://` (smb, edl, lavfi, ftp, ...) is
+/// dropped, since mpv would open it as given.
+const PLAYLIST_SCHEMES: [&str; 7] = ["http", "https", "rtsp", "rtmp", "udp", "rtp", "file"];
+
+/// Whether an entry read from a playlist file may be queued: a path, or a link with an allowed scheme.
+fn playlist_entry_allowed(entry: &str) -> bool {
+    match entry.split_once("://") {
+        None => true,
+        Some((scheme, _)) => {
+            let scheme = scheme.trim().to_ascii_lowercase();
+            PLAYLIST_SCHEMES.contains(&scheme.as_str())
+        }
+    }
+}
+
 fn is_media(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -59,7 +74,11 @@ fn percent_decode(text: &str) -> String {
 
 /// Turns `file:///a%20b.mkv` into `/a b.mkv`; anything else is returned unchanged.
 fn local_path(source: &str) -> String {
-    match source.strip_prefix("file://") {
+    match source
+        .get(..7)
+        .filter(|p| p.eq_ignore_ascii_case("file://"))
+        .map(|_| &source[7..])
+    {
         Some(rest) => percent_decode(rest.strip_prefix("localhost").unwrap_or(rest)),
         None => source.to_owned(),
     }
@@ -143,6 +162,7 @@ impl Queue {
                     .lines()
                     .map(str::trim)
                     .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                    .filter(|line| playlist_entry_allowed(line))
                     .map(|line| {
                         if is_url(line) || Path::new(line).is_absolute() {
                             line.to_owned()
@@ -328,6 +348,57 @@ mod tests {
             dir.path().join("song.mp3").to_string_lossy()
         );
         assert_eq!(queue.items[1].source, "https://x.test/live.m3u8");
+    }
+
+    #[test]
+    fn playlist_files_only_queue_allowed_schemes() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join("evil.m3u");
+        fs::write(
+            &list,
+            "#EXTM3U\nsmb://host/share/x.mkv\nedl://%5%http://a;!new_stream\nlavfi://sine\n\
+             ftp://h/x.mp3\nFILE:///tmp/ok.mp3\n  HTTP://x.test/a.mp3  \nrtsp://cam/s\n\
+             Rtmp://l/app\nudp://@:1\nrtp://239.0.0.1\nhttps://x.test/b.mp3\nrel.mp3\n/abs/c.mp3\n\
+             fd://3\nmemory://x\ncdda://\ndvd://1\n",
+        )
+        .unwrap();
+        let mut queue = Queue::default();
+        queue.add(&[list.to_string_lossy().into_owned()]);
+        let sources: Vec<&str> = queue.items.iter().map(|i| i.source.as_str()).collect();
+        let rel = dir.path().join("rel.mp3").to_string_lossy().into_owned();
+        assert_eq!(
+            sources,
+            [
+                "/tmp/ok.mp3",
+                "HTTP://x.test/a.mp3",
+                "rtsp://cam/s",
+                "Rtmp://l/app",
+                "udp://@:1",
+                "rtp://239.0.0.1",
+                "https://x.test/b.mp3",
+                rel.as_str(),
+                "/abs/c.mp3",
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_sources_are_not_filtered() {
+        let queue = queue_of(&["smb://h/s/x.mkv", "/a.mkv"]);
+        assert_eq!(queue.items.len(), 2, "command-line arguments stay as given");
+    }
+
+    #[test]
+    fn nested_playlists_are_filtered_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("inner.m3u");
+        fs::write(&inner, "lavfi://x\nok.mp3\n").unwrap();
+        let outer = dir.path().join("outer.m3u");
+        fs::write(&outer, "inner.m3u\nsmb://h/x\n").unwrap();
+        let mut queue = Queue::default();
+        queue.add(&[outer.to_string_lossy().into_owned()]);
+        assert_eq!(queue.items.len(), 1);
+        assert!(queue.items[0].source.ends_with("ok.mp3"));
     }
 
     #[test]
