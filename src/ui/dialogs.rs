@@ -6,20 +6,38 @@ use super::{Frontend, PrefsTab, UrlDialog, geometry, theme};
 use crate::keys::{self, Action, binding_text};
 use crate::streams::is_network_url;
 
+/// Warnings and failures; the theme has no dedicated error colour.
+const ERROR: Color32 = Color32::from_rgb(0xf0, 0x8a, 0x80);
+
 fn window(title: &str) -> egui::Window<'_> {
     egui::Window::new(title)
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+        .frame(
+            egui::Frame::window(&egui::Style::default())
+                .fill(theme::SIDEBAR)
+                .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
+                .inner_margin(egui::Margin::same(GAP as i8 + 4)),
+        )
+}
+
+/// The one spacing unit between groups.
+const GAP: f32 = 12.0;
+
+/// A small muted heading that starts a group of settings.
+fn section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(GAP / 2.0);
+    ui.label(theme::muted(title.to_uppercase()));
 }
 
 fn tool_status(ui: &mut egui::Ui, name: &str, found: bool, purpose: &str) {
     ui.horizontal(|ui| {
         if found {
-            ui.label(RichText::new("✔").color(Color32::from_rgb(0x7f, 0xd1, 0x8b)));
+            ui.label(RichText::new("✔").color(theme::ACCENT));
             ui.label(format!("{name} is installed"));
         } else {
-            ui.label(RichText::new("✖").color(Color32::from_rgb(0xf0, 0x8a, 0x80)));
+            ui.label(RichText::new("✖").color(ERROR));
             ui.label(format!("{name} was not found. Install it to {purpose}."));
         }
     });
@@ -46,6 +64,7 @@ impl Frontend {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.set_min_width(440.0);
+                ui.spacing_mut().item_spacing.y = GAP;
                 ui.label("Stream or video page URL (HTTP, HTTPS, RTSP, RTMP, UDP).");
                 ui.label(theme::muted(
                     "Twitch, Kick and YouTube links play through Streamlink and yt-dlp.",
@@ -57,10 +76,7 @@ impl Frontend {
                 );
                 field.request_focus();
                 if rejected {
-                    ui.colored_label(
-                        Color32::from_rgb(0xf0, 0x8a, 0x80),
-                        "Enter a supported network URL.",
-                    );
+                    ui.colored_label(ERROR, "Enter a supported network URL.");
                 }
                 ui.horizontal(|ui| {
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -88,6 +104,7 @@ impl Frontend {
         let mut settings_changed = false;
         window("Preferences").open(&mut open).show(ctx, |ui| {
             ui.set_min_width(500.0);
+            ui.spacing_mut().item_spacing.y = GAP;
             ui.horizontal(|ui| {
                 for (tab, label) in [
                     (PrefsTab::Playback, "Playback"),
@@ -98,10 +115,10 @@ impl Frontend {
                     geometry::note(ctx, label, response.rect);
                 }
             });
-            ui.separator();
             let s = &mut self.session.store.settings;
             match state.tab {
                 PrefsTab::Playback => {
+                    section(ui, "Seeking");
                     ui.horizontal(|ui| {
                         ui.label("Seek keys move");
                         settings_changed |= ui
@@ -112,6 +129,7 @@ impl Frontend {
                             )
                             .changed();
                     });
+                    section(ui, "Resuming");
                     settings_changed |= ui
                         .checkbox(&mut s.resume, "Resume where you left off")
                         .changed();
@@ -129,6 +147,7 @@ impl Frontend {
                         .changed();
                 }
                 PrefsTab::Streams => {
+                    section(ui, "Quality");
                     ui.horizontal(|ui| {
                         ui.label("Default quality");
                         settings_changed |= ui
@@ -139,6 +158,7 @@ impl Frontend {
                             .changed();
                         ui.label(theme::muted("best, or a name such as 720p60"));
                     });
+                    section(ui, "Live and video sites");
                     settings_changed |= ui
                         .checkbox(&mut s.low_latency, "Low-latency mode for Twitch and Kick")
                         .changed();
@@ -156,7 +176,7 @@ impl Frontend {
                     if s.stream_quality.trim().is_empty() {
                         s.stream_quality = "best".to_owned();
                     }
-                    ui.separator();
+                    section(ui, "Helper tools");
                     let tools = &self.session.streams.tools;
                     tool_status(
                         ui,
@@ -247,11 +267,11 @@ impl Frontend {
                                 });
                         });
                     if let Some(message) = &state.message {
-                        ui.colored_label(Color32::from_rgb(0xf0, 0x8a, 0x80), message);
+                        ui.colored_label(ERROR, message);
                     }
                 }
             }
-            ui.separator();
+            ui.add_space(GAP / 2.0);
             let version = self.session.engine.version();
             ui.label(theme::muted(format!(
                 "Lumen Rust {} · {}",
@@ -279,6 +299,7 @@ impl Frontend {
         let mut open = true;
         window("Media information").open(&mut open).show(ctx, |ui| {
             ui.set_min_width(380.0);
+            ui.spacing_mut().item_spacing.y = GAP / 2.0;
             match source {
                 None => {
                     ui.label(theme::muted("Nothing is playing."));
@@ -289,7 +310,7 @@ impl Frontend {
                             .truncate(),
                     );
                     ui.add(egui::Label::new(theme::muted(&source)).truncate());
-                    ui.add_space(6.0);
+                    section(ui, "Details");
                     egui::Grid::new("info")
                         .num_columns(2)
                         .spacing([18.0, 6.0])

@@ -31,7 +31,9 @@ const CHROME_HIDE: Duration = Duration::from_secs(2);
 const DOUBLE_CLICK: Duration = Duration::from_millis(280);
 /// Height of the status line, seek bar and transport row under the video.
 const CONTROLS_HEIGHT: f32 = 132.0;
-const SIDEBAR_WIDTH: f32 = 300.0;
+const SIDEBAR_WIDTH: f32 = 248.0;
+/// The one spacing unit between groups of controls.
+const GAP: f32 = 12.0;
 const MINI_SIZE: [f32; 2] = [480.0, 270.0];
 /// Below this width the transport row drops its extras.
 const NARROW: f32 = 640.0;
@@ -162,8 +164,7 @@ impl Frontend {
                     .frame(
                         egui::Frame::new()
                             .fill(theme::SIDEBAR)
-                            .stroke(Stroke::new(1.0_f32, theme::BORDER))
-                            .inner_margin(Margin::same(18)),
+                            .inner_margin(Margin::same(GAP as i8)),
                     )
                     .show(ctx, |ui| self.sidebar(ui));
             }
@@ -171,7 +172,7 @@ impl Frontend {
                 .frame(
                     egui::Frame::new()
                         .fill(theme::BG)
-                        .inner_margin(Margin::same(22)),
+                        .inner_margin(Margin::same(GAP as i8 * 2)),
                 )
                 .show(ctx, |ui| self.main_view(ui, surface));
         }
@@ -457,32 +458,19 @@ impl Frontend {
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
-            if let Some(brand) = &self.brand {
-                ui.image((brand.id(), Vec2::splat(40.0)));
-            }
-            ui.label(
-                RichText::new("Lumen")
-                    .size(24.0)
-                    .strong()
-                    .color(Color32::from_rgb(0xf4, 0xf1, 0xec)),
-            );
-        });
-        ui.label(theme::muted("YOUR MEDIA, IN A BETTER LIGHT."));
-        ui.add_space(12.0);
+        ui.spacing_mut().item_spacing.y = GAP;
         if theme::primary(ui, "+   Open media", Some(ui.available_width())).clicked() {
             self.perform(&ctx, Action::Open);
         }
         if theme::wide(ui, "↗   Network stream").clicked() {
             self.perform(&ctx, Action::OpenUrl);
         }
-        ui.add_space(6.0);
 
         egui::TopBottomPanel::bottom("sidebar_footer")
             .frame(egui::Frame::NONE)
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                ui.add_space(6.0);
+                ui.add_space(GAP);
                 ui.horizontal(|ui| {
                     let half = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
                     let save = ui.add_enabled(
@@ -521,6 +509,7 @@ impl Frontend {
                 .desired_width(f32::INFINITY)
                 .margin(Margin::symmetric(10, 8)),
         );
+        ui.spacing_mut().item_spacing.y = 4.0;
         self.queue_list(ui);
     }
 
@@ -531,7 +520,7 @@ impl Frontend {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.spacing_mut().item_spacing.y = 2.0;
                 let mut shown = 0;
                 for (index, item) in self.session.queue.items.iter().enumerate() {
                     if !needle.is_empty()
@@ -544,7 +533,7 @@ impl Frontend {
                     let current = self.session.queue.current == Some(index);
                     let selected = self.selected == Some(index);
                     let (rect, row) = ui
-                        .allocate_exact_size(Vec2::new(ui.available_width(), 38.0), Sense::click());
+                        .allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
                     geometry::note(ui.ctx(), &item.title, rect);
                     let fill = if current || selected {
                         theme::SELECTED_BG
@@ -559,7 +548,7 @@ impl Frontend {
                     } else {
                         theme::TEXT
                     };
-                    let text_rect = rect.shrink2(Vec2::new(12.0, 0.0));
+                    let text_rect = rect.shrink2(Vec2::new(GAP, 0.0));
                     // Left-aligned, unlike `ui.put`, which centres its widget.
                     let mut text_ui = ui.new_child(
                         UiBuilder::new()
@@ -622,7 +611,7 @@ impl Frontend {
 
     fn main_view(&mut self, ui: &mut egui::Ui, surface: &mut dyn Surface) {
         self.header(ui);
-        ui.add_space(6.0);
+        ui.add_space(GAP);
         let video_height = (ui.available_height() - CONTROLS_HEIGHT).max(120.0);
         let (rect, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), video_height),
@@ -642,7 +631,7 @@ impl Frontend {
             StrokeKind::Inside,
         );
 
-        ui.add_space(2.0);
+        ui.add_space(GAP / 2.0);
         ui.label(theme::muted(self.session.status()));
         self.seek_row(ui);
         self.transport_row(ui);
@@ -657,28 +646,38 @@ impl Frontend {
             .and_then(|c| self.session.queue.items.get(c))
             .map(|i| i.title.clone());
         ui.horizontal(|ui| {
-            let menus_width = 340.0;
+            let menus_width = 220.0;
             let text_width = (ui.available_width() - menus_width).max(120.0);
-            ui.allocate_ui(Vec2::new(text_width, 52.0), |ui| {
+            ui.allocate_ui(Vec2::new(text_width, 40.0), |ui| {
                 ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     let heading = if playing.is_some() {
                         "Now playing"
                     } else {
                         "Welcome"
                     };
-                    ui.label(RichText::new(heading).size(25.0).strong());
-                    let subtitle = playing.as_deref().unwrap_or("Open something to begin");
-                    ui.add(egui::Label::new(theme::muted(subtitle)).truncate());
+                    ui.label(theme::muted(heading));
+                    let title = playing.as_deref().unwrap_or("Open something to begin");
+                    ui.add(egui::Label::new(RichText::new(title).size(18.0).strong()).truncate());
                 });
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Quiet header menus: no resting fill or outline until hovered.
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                widgets.inactive.bg_stroke = Stroke::NONE;
+                ui.spacing_mut().item_spacing.x = 4.0;
                 let more =
                     ui.menu_button(RichText::new("…").strong(), |ui| self.more_menu(ui, &ctx));
                 geometry::note(&ctx, "…", more.response.rect);
-                let video = ui.menu_button("Video", |ui| self.video_menu(ui, &ctx));
+                let video = ui.menu_button(RichText::new("Video").color(theme::MUTED), |ui| {
+                    self.video_menu(ui, &ctx)
+                });
                 geometry::note(&ctx, "Video", video.response.rect);
-                let audio = ui.menu_button("Audio & subtitles", |ui| self.audio_menu(ui, &ctx));
+                let audio = ui.menu_button(
+                    RichText::new("Audio & subtitles").color(theme::MUTED),
+                    |ui| self.audio_menu(ui, &ctx),
+                );
                 geometry::note(&ctx, "Audio & subtitles", audio.response.rect);
             });
         });
@@ -782,28 +781,26 @@ impl Frontend {
                 .max_rect(rect.shrink2(Vec2::new(24.0, 0.0)))
                 .layout(Layout::top_down(Align::Center)),
         );
-        let content = 190.0
+        let content = 230.0
             + if recent.is_empty() {
                 0.0
             } else {
-                40.0 + 34.0 * recent.len() as f32
+                48.0 + 32.0 * recent.len() as f32
             };
+        child.spacing_mut().item_spacing.y = GAP;
         child.add_space(((rect.height() - content) / 2.0).max(8.0));
         if let Some(brand) = &self.brand {
-            child.image((brand.id(), Vec2::splat(64.0)));
+            child.image((brand.id(), Vec2::splat(48.0)));
         }
+        child.label(RichText::new("Lumen").size(32.0).strong());
+        child.label(theme::muted("Every format. Every frame."));
+        child.add_space(GAP / 2.0);
         let heading = if queued {
             "Ready when you are"
         } else {
             "Drop media here"
         };
-        child.label(
-            RichText::new(heading)
-                .size(22.0)
-                .color(Color32::from_rgb(0xcb, 0xd0, 0xdc)),
-        );
-        child.label(theme::muted("Video, music, playlists or a link"));
-        child.add_space(6.0);
+        child.label(RichText::new(heading).size(16.0).color(theme::TEXT));
         if queued {
             if theme::primary(&mut child, "▶   Play", Some(180.0)).clicked() {
                 self.session.toggle();
@@ -816,14 +813,15 @@ impl Frontend {
             self.key_hint(Action::OpenUrl)
         )));
         if !recent.is_empty() {
-            child.add_space(14.0);
+            child.add_space(GAP / 2.0);
             child.label(theme::muted("RECENT"));
+            child.spacing_mut().item_spacing.y = 0.0;
             for source in recent {
                 let name = crate::queue::title_of(&source);
                 let button = egui::Button::new(RichText::new(name).color(theme::TEXT))
                     .fill(Color32::TRANSPARENT)
                     .stroke(Stroke::NONE)
-                    .min_size(Vec2::new(300.0, 28.0));
+                    .min_size(Vec2::new(300.0, 32.0));
                 if child.add(button).on_hover_text(&source).clicked() {
                     self.session.add(&[source], true);
                 }
@@ -1066,7 +1064,12 @@ impl Frontend {
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
                     egui::Frame::new()
-                        .fill(Color32::from_rgba_unmultiplied(0x12, 0x14, 0x19, 225))
+                        .fill(Color32::from_rgba_unmultiplied(
+                            theme::BG.r(),
+                            theme::BG.g(),
+                            theme::BG.b(),
+                            225,
+                        ))
                         .inner_margin(Margin::symmetric(16, 10))
                         .show(ui, |ui| {
                             ui.set_width(width - 32.0);
