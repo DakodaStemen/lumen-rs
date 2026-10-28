@@ -51,7 +51,11 @@ actions! {
     Bookmark, "bookmark", "Add bookmark", "Ctrl+B";
     Fullscreen, "fullscreen", "Fullscreen", "F";
     ExitFullscreen, "exit_fullscreen", "Leave fullscreen", "Escape";
+    Open, "open", "Open media", "Ctrl+O";
     OpenUrl, "network", "Open network stream", "Ctrl+L";
+    Mini, "mini", "Mini player", "Ctrl+M";
+    OnTop, "on_top", "Always on top", "Ctrl+T";
+    Preferences, "preferences", "Preferences", "Ctrl+,";
     ToggleQueue, "toggle_queue", "Show / hide play queue", "Q";
     Remove, "remove", "Remove queue item", "Delete";
 }
@@ -84,6 +88,48 @@ impl Binding {
             key: parse_key(key)?,
             modifiers,
         })
+    }
+
+    /// The text form of a pressed key, which `parse` reads back. `None` for keys Lumen cannot bind.
+    pub fn format(key: Key, modifiers: Modifiers) -> Option<String> {
+        let name = match key {
+            Key::Space => "Space",
+            Key::ArrowRight => "Right",
+            Key::ArrowLeft => "Left",
+            Key::ArrowUp => "Up",
+            Key::ArrowDown => "Down",
+            Key::PageDown => "PgDown",
+            Key::PageUp => "PgUp",
+            Key::Escape => "Escape",
+            Key::Delete => "Delete",
+            Key::Enter => "Enter",
+            Key::Period => ".",
+            Key::Comma => ",",
+            Key::OpenBracket => "[",
+            Key::CloseBracket => "]",
+            Key::Equals => "=",
+            Key::Minus => "-",
+            Key::Plus => "+",
+            Key::Slash => "/",
+            Key::Semicolon => ";",
+            Key::Quote => "'",
+            Key::Backtick => "`",
+            Key::Backslash => "\\",
+            other => other.name(),
+        };
+        let mut text = String::new();
+        for (held, word) in [
+            (modifiers.ctrl, "Ctrl"),
+            (modifiers.alt, "Alt"),
+            (modifiers.shift, "Shift"),
+        ] {
+            if held {
+                text.push_str(word);
+                text.push('+');
+            }
+        }
+        text.push_str(name);
+        (Self::parse(&text)?.key == key).then_some(text)
     }
 
     fn weight(&self) -> u32 {
@@ -148,6 +194,39 @@ impl Keymap {
     pub fn bindings(&self) -> &[(Action, Binding)] {
         &self.bindings
     }
+}
+
+/// Binds `action` to `text`. Fails with the action that already uses that key, changing nothing.
+pub fn rebind(
+    overrides: &mut BTreeMap<String, String>,
+    action: Action,
+    text: &str,
+) -> Result<(), Action> {
+    let wanted = Binding::parse(text);
+    if let Some(wanted) = wanted
+        && let Some(other) = Action::ALL
+            .iter()
+            .copied()
+            .find(|&a| a != action && Binding::parse(&binding_text(overrides, a)) == Some(wanted))
+    {
+        return Err(other);
+    }
+    if text == action.default_key() {
+        overrides.remove(action.id());
+    } else {
+        overrides.insert(action.id().to_owned(), text.to_owned());
+    }
+    Ok(())
+}
+
+/// Leaves `action` with no key.
+pub fn unbind(overrides: &mut BTreeMap<String, String>, action: Action) {
+    overrides.insert(action.id().to_owned(), String::new());
+}
+
+/// Puts `action` back on its default key, unless another action has taken it.
+pub fn reset(overrides: &mut BTreeMap<String, String>, action: Action) -> Result<(), Action> {
+    rebind(overrides, action, action.default_key())
 }
 
 /// The key text for `action`, as the user would type it.
@@ -219,6 +298,78 @@ mod tests {
         assert_eq!(find(Action::Mute), Binding::parse("Ctrl+U"));
         assert_eq!(find(Action::Stop), None);
         assert!(find(Action::Play).is_some());
+    }
+
+    #[test]
+    fn every_bindable_key_reads_back_as_itself() {
+        let mut bindable = 0;
+        for &key in Key::ALL {
+            let Some(text) = Binding::format(key, Modifiers::NONE) else {
+                continue;
+            };
+            assert_eq!(Binding::parse(&text).unwrap().key, key, "{text}");
+            bindable += 1;
+        }
+        assert!(
+            bindable > 60,
+            "letters, digits, arrows, F-keys and symbols are bindable ({bindable})"
+        );
+        let both = Binding::format(
+            Key::S,
+            Modifiers {
+                ctrl: true,
+                shift: true,
+                ..Modifiers::NONE
+            },
+        )
+        .unwrap();
+        assert_eq!(both, "Ctrl+Shift+S");
+        assert_eq!(Binding::parse(&both), Binding::parse("Ctrl+Shift+S"));
+    }
+
+    #[test]
+    fn rebinding_refuses_a_key_that_is_taken() {
+        let mut keys = BTreeMap::new();
+        assert_eq!(rebind(&mut keys, Action::Mute, "Space"), Err(Action::Play));
+        assert!(keys.is_empty(), "a refused rebind changes nothing");
+        assert_eq!(rebind(&mut keys, Action::Mute, "Ctrl+U"), Ok(()));
+        assert_eq!(rebind(&mut keys, Action::Stop, "Ctrl+U"), Err(Action::Mute));
+        // The key Mute gave up is free again.
+        assert_eq!(rebind(&mut keys, Action::Stop, "M"), Ok(()));
+    }
+
+    #[test]
+    fn rebinding_to_the_default_removes_the_override() {
+        let mut keys = BTreeMap::new();
+        rebind(&mut keys, Action::Mute, "Ctrl+U").unwrap();
+        assert_eq!(reset(&mut keys, Action::Mute), Ok(()));
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn a_reset_is_refused_while_another_action_holds_the_default() {
+        let mut keys = BTreeMap::new();
+        rebind(&mut keys, Action::Mute, "Ctrl+U").unwrap();
+        rebind(&mut keys, Action::Stop, "M").unwrap();
+        assert_eq!(reset(&mut keys, Action::Mute), Err(Action::Stop));
+        assert_eq!(binding_text(&keys, Action::Mute), "Ctrl+U");
+    }
+
+    #[test]
+    fn unbinding_leaves_no_key() {
+        let mut keys = BTreeMap::new();
+        unbind(&mut keys, Action::Stop);
+        assert!(
+            Keymap::from_settings(&keys)
+                .bindings()
+                .iter()
+                .all(|(a, _)| *a != Action::Stop)
+        );
+        assert_eq!(
+            rebind(&mut keys, Action::Mute, "S"),
+            Ok(()),
+            "an unbound action's key can be reused"
+        );
     }
 
     #[test]

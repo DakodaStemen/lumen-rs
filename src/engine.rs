@@ -36,6 +36,12 @@ impl TrackKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chapter {
+    pub title: String,
+    pub time_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Track {
     pub id: i64,
     pub label: String,
@@ -96,6 +102,11 @@ impl Engine {
             mpv: Arc::new(mpv),
             loadfile_index,
         })
+    }
+
+    /// The mpv version, such as `mpv 0.41.0`.
+    pub fn version(&self) -> String {
+        self.text("mpv-version").unwrap_or_else(|| "mpv".to_owned())
     }
 
     pub fn handle(&self) -> &Arc<Mpv> {
@@ -319,6 +330,79 @@ impl Engine {
 
     pub fn chapter_count(&self) -> i64 {
         self.integer("chapter-list/count").unwrap_or(0)
+    }
+
+    /// Chapter titles and start times, in file order.
+    pub fn chapters(&self) -> Vec<Chapter> {
+        (0..self.chapter_count())
+            .map(|i| Chapter {
+                title: self
+                    .text(&format!("chapter-list/{i}/title"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
+                time_ms: self
+                    .number(&format!("chapter-list/{i}/time"))
+                    .map_or(0, |s| (s * 1000.0).round() as i64),
+            })
+            .collect()
+    }
+
+    /// The chapter being played, if the file has chapters.
+    pub fn chapter(&self) -> Option<usize> {
+        self.integer("chapter")
+            .and_then(|c| usize::try_from(c).ok())
+    }
+
+    pub fn set_chapter(&self, index: usize) {
+        let _ = self.mpv.set_property("chapter", index as i64);
+    }
+
+    /// Facts about the playing file as label and value pairs, leaving out what mpv does not know.
+    pub fn media_info(&self) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        if self.idle() {
+            return rows;
+        }
+        let mut add = |label: &str, value: Option<String>| {
+            if let Some(value) = value.filter(|v| !v.is_empty()) {
+                rows.push((label.to_owned(), value));
+            }
+        };
+        add("Container", self.text("file-format"));
+        add("Duration", self.duration_ms().map(crate::clock::clock));
+        let size = self
+            .integer("file-size")
+            .filter(|s| *s > 0)
+            .map(|s| format!("{:.1} MB", s as f64 / 1_048_576.0));
+        add("Size", size);
+        let resolution = match (
+            self.integer("video-params/w"),
+            self.integer("video-params/h"),
+        ) {
+            (Some(w), Some(h)) => Some(format!("{w} × {h}")),
+            _ => None,
+        };
+        add("Video", self.text("video-codec"));
+        add("Resolution", resolution);
+        add("Frame rate", self.fps().map(|f| format!("{f:.3} fps")));
+        add(
+            "Hardware decoding",
+            self.text("hwdec-current")
+                .filter(|h| h != "no")
+                .or(Some("off".to_owned())),
+        );
+        add("Audio", self.text("audio-codec"));
+        let channels = self
+            .integer("audio-params/channel-count")
+            .map(|c| format!("{c} channels"));
+        add("Channels", channels);
+        add(
+            "Sample rate",
+            self.integer("audio-params/samplerate")
+                .map(|r| format!("{r} Hz")),
+        );
+        rows
     }
 
     pub fn chapter_step(&self, delta: i64) {

@@ -14,7 +14,8 @@ without a display.
 | `keys.rs` | Actions, default keys and user overrides. |
 | `clock.rs` | Time formatting and natural sort keys. |
 | `video.rs` | Renders mpv's picture into an offscreen GL texture. |
-| `app.rs` | The egui window, controls, queue panel and key handling. |
+| `ui/` | The interface. `mod.rs` lays out the window and handles input, `menus.rs` the header and context menus, `dialogs.rs` Preferences, media information and the link dialog, `bar.rs` the seek and volume bar, `theme.rs` Lumen's colours, `picker.rs` native file dialogs. |
+| `app.rs` | The eframe glue: gives the interface a GPU video surface. |
 
 ## Video path
 
@@ -26,6 +27,16 @@ windows scale it up.
 
 The render context borrows the player, so `Video` holds its own reference to the player
 and is dropped, while eframe's GL context is still current, in `App::on_exit`.
+
+## Interface
+
+The interface draws through a `Surface`, which is where the video goes. The window uses a GL
+surface; tests use a black rectangle, so the whole interface runs in tests with no GPU and is
+driven through accessible labels (every icon button has a name for screen readers).
+File dialogs run on their own thread and report through a channel, which tests can feed directly.
+
+Fullscreen and the mini player share a compact view: the picture fills the window and one
+overlay holds the seek bar and transport row, hidden after two seconds without pointer movement.
 
 ## Timing
 

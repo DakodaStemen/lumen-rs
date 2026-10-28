@@ -65,7 +65,7 @@ fn local_path(source: &str) -> String {
     }
 }
 
-fn title_of(source: &str) -> String {
+pub fn title_of(source: &str) -> String {
     let name = if is_url(source) {
         let without_query = source.split(['?', '#']).next().unwrap_or(source);
         // Only the path names the file; a bare host such as `rtsp://cam` has no file name.
@@ -159,6 +159,21 @@ impl Queue {
                 source,
             });
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.current = None;
+    }
+
+    /// The queue as an M3U playlist that `add` can read back.
+    pub fn to_m3u(&self) -> String {
+        let mut text = String::from("#EXTM3U\n");
+        for item in &self.items {
+            text.push_str(&item.source);
+            text.push('\n');
+        }
+        text
     }
 
     /// Removes an item, keeping `current` pointing at the same entry.
@@ -313,6 +328,26 @@ mod tests {
             dir.path().join("song.mp3").to_string_lossy()
         );
         assert_eq!(queue.items[1].source, "https://x.test/live.m3u8");
+    }
+
+    #[test]
+    fn saved_queues_read_back_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        let queue = queue_of(&["/media/a b.mkv", "https://x.test/live.m3u8", "/media/c.mp3"]);
+        let list = dir.path().join("saved.m3u");
+        fs::write(&list, queue.to_m3u()).unwrap();
+        let mut restored = Queue::default();
+        restored.add(&[list.to_string_lossy().into_owned()]);
+        assert_eq!(restored.items, queue.items);
+    }
+
+    #[test]
+    fn clearing_empties_the_queue() {
+        let mut queue = queue_of(&["/a", "/b"]);
+        queue.current = Some(1);
+        queue.clear();
+        assert!(queue.items.is_empty());
+        assert_eq!(queue.current, None);
     }
 
     #[test]

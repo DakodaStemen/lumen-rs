@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::clock::clock;
-use crate::engine::{Engine, TrackKind};
+use crate::engine::{Chapter, Engine, TrackKind};
 use crate::keys::{Action, binding_text};
 use crate::queue::{Queue, is_url};
 use crate::sponsorblock::{self, Segment};
 use crate::store::{FileState, Store};
-use crate::streams::{Activity, Event, Plan, Streams, Tools};
+use crate::streams::{Activity, Event, Plan, Streams, Tools, has_media_extension, is_web};
 
 pub const RATES: [f64; 10] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0];
 const SAVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -147,7 +147,17 @@ impl Session {
         self.pending = Pending { start_ms, paused };
 
         match self.streams.plan(&source) {
-            Plan::Direct => self.start(&source, start_ms, paused, None, true),
+            Plan::Direct => {
+                let no_tools =
+                    self.streams.tools.streamlink.is_none() && self.streams.tools.ytdlp.is_none();
+                if no_tools && is_web(&source) && !has_media_extension(&source) {
+                    self.flash_for(
+                        "Playing this link directly. Install yt-dlp or streamlink for sites like YouTube and Twitch.",
+                        LONG_FLASH,
+                    );
+                }
+                self.start(&source, start_ms, paused, None, true);
+            }
             Plan::Resolve => {
                 let settings = &self.store.settings;
                 self.streams
@@ -501,7 +511,7 @@ impl Session {
             }
             (Some(a), None) if now > a => {
                 self.set_loop(Some(a), Some(now));
-                self.flash(&format!("Looping {} → {}", clock(a), clock(now)));
+                self.flash(&format!("Looping {} – {}", clock(a), clock(now)));
             }
             _ => {
                 self.clear_loop();
@@ -546,6 +556,94 @@ impl Session {
         } else {
             self.flash("Screenshot failed");
         }
+    }
+
+    // ----- queue and library -----
+
+    /// Empties the queue and stops playback.
+    pub fn clear_queue(&mut self) {
+        self.stop();
+        self.finished = true;
+        self.queue.clear();
+    }
+
+    pub fn clear_recent(&mut self) {
+        self.store.settings.recent.clear();
+        self.store.save_settings();
+    }
+
+    /// Bookmarks of the current file, in time order.
+    pub fn bookmarks(&self) -> Vec<i64> {
+        self.source()
+            .map_or_else(Vec::new, |s| self.store.file_state(&s).bookmarks)
+    }
+
+    pub fn remove_bookmark(&mut self, ms: i64) {
+        if let Some(source) = self.source() {
+            let mut state = self.store.file_state(&source);
+            state.bookmarks.retain(|b| *b != ms);
+            self.store.save_file_state(&source, state);
+        }
+    }
+
+    pub fn clear_bookmarks(&mut self) {
+        if let Some(source) = self.source() {
+            let mut state = self.store.file_state(&source);
+            state.bookmarks.clear();
+            self.store.save_file_state(&source, state);
+            self.flash("Bookmarks cleared");
+        }
+    }
+
+    // ----- chapters, tracks and subtitles -----
+
+    pub fn chapters(&self) -> Vec<Chapter> {
+        self.engine.chapters()
+    }
+
+    pub fn current_chapter(&self) -> Option<usize> {
+        self.engine.chapter()
+    }
+
+    pub fn go_to_chapter(&mut self, index: usize) {
+        self.engine.set_chapter(index);
+    }
+
+    /// Picks an audio or subtitle track by id, or switches subtitles off with `None`.
+    pub fn select_track(&mut self, kind: TrackKind, id: Option<i64>) {
+        self.engine.select_track(kind, id);
+        let name = if kind == TrackKind::Audio {
+            "Audio"
+        } else {
+            "Subtitles"
+        };
+        let label = id
+            .and_then(|id| self.engine.tracks(kind).into_iter().find(|t| t.id == id))
+            .map_or("Off".to_owned(), |t| t.label);
+        self.flash(&format!("{name}: {label}"));
+        self.save_position(false);
+    }
+
+    /// Loads a subtitle file now, and again whenever this file is played.
+    pub fn load_subtitle(&mut self, path: &str) {
+        let Some(source) = self.source() else {
+            self.flash("Open a video first");
+            return;
+        };
+        self.engine.add_subtitle(path);
+        let mut state = self.store.file_state(&source);
+        if !state.subtitles.iter().any(|s| s == path) {
+            state.subtitles.push(path.to_owned());
+            self.store.save_file_state(&source, state);
+        }
+        self.flash("Subtitles loaded");
+    }
+
+    pub fn reset_delays(&mut self) {
+        self.engine.set_delay_ms(TrackKind::Audio, 0);
+        self.engine.set_delay_ms(TrackKind::Subtitle, 0);
+        self.flash("Sync reset");
+        self.save_position(false);
     }
 
     // ----- streams -----
@@ -697,6 +795,14 @@ impl Session {
         self.flash = Some((text, Instant::now() + duration));
     }
 
+    /// The message from the last action while it is still fresh, such as `SPEED 1.25×`.
+    pub fn flash_message(&self) -> Option<&str> {
+        self.flash
+            .as_ref()
+            .filter(|(_, until)| Instant::now() < *until)
+            .map(|(text, _)| text.as_str())
+    }
+
     /// The status line: a recent message if there is one, otherwise the playback state.
     pub fn status(&self) -> String {
         if let Some((text, until)) = &self.flash
@@ -724,7 +830,7 @@ impl Session {
         .to_owned();
         if let Some(a) = self.loop_a {
             let b = self.loop_b.map_or("…".to_owned(), clock);
-            text += &format!("   ·   LOOP {} → {b}", clock(a));
+            text += &format!("   ·   LOOP {} – {b}", clock(a));
         }
         text + "   /   mpv"
     }

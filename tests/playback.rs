@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use common::{fixture, play, session, settled_position, wait};
 use lumen_rs::engine::TrackKind;
 use lumen_rs::session::State;
+use lumen_rs::streams::Tools;
 
 #[test]
 fn resumes_where_it_stopped_and_remembers_sync_per_file() {
@@ -301,4 +302,174 @@ fn unreadable_media_reports_an_error_and_does_not_advance() {
     assert!(wait(&mut s, 5, |s| s.state() == State::Idle
         || s.state() == State::Ended));
     assert_eq!(s.queue.current, Some(0));
+}
+
+#[test]
+fn chapters_are_listed_and_selectable() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    assert!(s.chapters().is_empty());
+    play(&mut s, &fx.path("chapters.mkv"));
+    assert!(wait(&mut s, 3, |s| s.chapters().len() == 2));
+    let chapters = s.chapters();
+    assert_eq!(
+        (chapters[0].title.as_str(), chapters[0].time_ms),
+        ("Intro", 0)
+    );
+    assert_eq!(
+        (chapters[1].title.as_str(), chapters[1].time_ms),
+        ("Main", 10_000)
+    );
+    assert_eq!(s.current_chapter(), Some(0));
+    s.go_to_chapter(1);
+    assert!(wait(&mut s, 4, |s| s.position_ms() >= 9_500
+        && s.current_chapter() == Some(1)));
+}
+
+#[test]
+fn bookmarks_are_listed_sorted_and_removable() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    assert!(s.bookmarks().is_empty());
+    play(&mut s, &fx.path("single/film.mp4"));
+    s.seek_ms(9_000);
+    assert!(wait(&mut s, 5, |s| s.position_ms() >= 9_000));
+    s.add_bookmark();
+    s.seek_ms(2_000);
+    assert!(wait(&mut s, 5, |s| (2_000..4_000).contains(&s.position_ms())));
+    s.add_bookmark();
+    let marks = s.bookmarks();
+    assert_eq!(marks.len(), 2);
+    assert!(marks[0] < marks[1], "listed in time order");
+    s.remove_bookmark(marks[0]);
+    assert_eq!(s.bookmarks(), [marks[1]]);
+    s.clear_bookmarks();
+    assert!(s.bookmarks().is_empty());
+}
+
+#[test]
+fn tracks_can_be_chosen_by_id_and_subtitles_switched_off() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    play(&mut s, &fx.path("tracks.mkv"));
+    let audio = s.engine.tracks(TrackKind::Audio);
+    s.select_track(TrackKind::Audio, Some(audio[1].id));
+    assert_eq!(s.engine.selected_track(TrackKind::Audio), Some(audio[1].id));
+    assert!(
+        s.status().to_lowercase().contains("jpn"),
+        "the message names the track: {}",
+        s.status()
+    );
+    let subs = s.engine.tracks(TrackKind::Subtitle);
+    s.select_track(TrackKind::Subtitle, Some(subs[0].id));
+    assert_eq!(
+        s.engine.selected_track(TrackKind::Subtitle),
+        Some(subs[0].id)
+    );
+    s.select_track(TrackKind::Subtitle, None);
+    assert_eq!(s.engine.selected_track(TrackKind::Subtitle), None);
+    assert_eq!(s.flash_message(), Some("SUBTITLES: OFF"));
+}
+
+#[test]
+fn a_loaded_subtitle_file_comes_back_with_the_video() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    s.load_subtitle("/nowhere.srt");
+    assert_eq!(s.flash_message(), Some("OPEN A VIDEO FIRST"));
+
+    play(&mut s, &fx.path("single/film.mp4"));
+    assert!(s.engine.tracks(TrackKind::Subtitle).is_empty());
+    let subs = fx.path("subs.srt");
+    s.load_subtitle(&subs);
+    assert!(wait(&mut s, 5, |s| s
+        .engine
+        .tracks(TrackKind::Subtitle)
+        .len()
+        == 1));
+    let source = s.source().unwrap();
+    assert_eq!(
+        s.store.file_state(&source).subtitles,
+        std::slice::from_ref(&subs)
+    );
+    s.load_subtitle(&subs);
+    assert_eq!(
+        s.store.file_state(&source).subtitles.len(),
+        1,
+        "loading it twice remembers it once"
+    );
+
+    s.play_index(0, Some(0), false);
+    assert!(
+        wait(&mut s, 8, |s| s.engine.tracks(TrackKind::Subtitle).len()
+            == 1),
+        "reattached on replay"
+    );
+}
+
+#[test]
+fn resetting_sync_clears_both_delays() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    play(&mut s, &fx.path("show/ep1.mp4"));
+    s.shift_delay(TrackKind::Audio, 150);
+    s.shift_delay(TrackKind::Subtitle, -250);
+    s.reset_delays();
+    assert_eq!(s.engine.delay_ms(TrackKind::Audio), 0);
+    assert_eq!(s.engine.delay_ms(TrackKind::Subtitle), 0);
+}
+
+#[test]
+fn clearing_the_queue_stops_playback() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    s.add(&[fx.path("show/ep1.mp4"), fx.path("show/ep2.mp4")], true);
+    assert!(wait(&mut s, 8, |s| s.state() == State::Playing));
+    s.clear_queue();
+    assert!(s.queue.items.is_empty());
+    assert!(wait(&mut s, 3, |s| s.state() == State::Idle));
+    assert!(s.source().is_none());
+}
+
+#[test]
+fn media_information_describes_the_playing_file() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    assert!(
+        s.engine.media_info().is_empty(),
+        "nothing playing, nothing to report"
+    );
+    play(&mut s, &fx.path("show/ep1.mp4"));
+    assert!(wait(&mut s, 3, |s| s
+        .engine
+        .media_info()
+        .iter()
+        .any(|(k, _)| k == "Sample rate")));
+    let info = s.engine.media_info();
+    let get = |label: &str| {
+        info.iter()
+            .find(|(k, _)| k == label)
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(get("Resolution"), Some("320 × 180"));
+    assert_eq!(get("Sample rate"), Some("44100 Hz"));
+    assert_eq!(get("Duration"), Some("0:30"));
+    assert!(get("Container").is_some_and(|c| c.contains("mp4")));
+    assert!(get("Frame rate").is_some_and(|f| f.starts_with("24.")));
+}
+
+#[test]
+fn a_site_link_without_helper_programs_explains_what_to_install() {
+    let Some(_fx) = fixture() else { return };
+    let mut s = session();
+    s.streams.tools = Tools::default();
+    s.add(
+        &["https://www.youtube.com/watch?v=jNQXAC9IVRw".to_owned()],
+        true,
+    );
+    assert!(
+        s.status().contains("Install yt-dlp or streamlink"),
+        "{}",
+        s.status()
+    );
 }

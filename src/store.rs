@@ -26,6 +26,10 @@ pub struct Settings {
     pub sponsorblock: bool,
     /// Also skip intros and outros, not just sponsor reads.
     pub sponsorblock_intros: bool,
+    pub show_queue: bool,
+    pub always_on_top: bool,
+    /// The folder the file picker opens in.
+    pub last_dir: String,
     /// Key bindings by action id. An empty string unbinds the action.
     pub keys: BTreeMap<String, String>,
     pub recent: Vec<String>,
@@ -43,6 +47,9 @@ impl Default for Settings {
             low_latency: true,
             sponsorblock: true,
             sponsorblock_intros: false,
+            show_queue: true,
+            always_on_top: false,
+            last_dir: String::new(),
             keys: BTreeMap::new(),
             recent: Vec::new(),
         }

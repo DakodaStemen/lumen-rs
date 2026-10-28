@@ -38,7 +38,10 @@ fn main() -> Result<()> {
             .with_inner_size([1100.0, 680.0])
             .with_min_inner_size([480.0, 320.0])
             .with_title("Lumen")
-            .with_app_id("lumen-rs"),
+            .with_app_id("lumen-rs")
+            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(
+                "../assets/icon.png"
+            ))?),
         ..Default::default()
     };
     eframe::run_native(

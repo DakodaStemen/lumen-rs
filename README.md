@@ -23,7 +23,17 @@ superiority is claimed.
   and volume up to 200%.
 - Audio and subtitle track switching, and audio and subtitle delay in 50 ms steps.
 - Screenshots, fullscreen with auto-hiding controls, and a status line.
-- A key for every action, each rebindable in the settings file.
+- Lumen's own layout: a sidebar with **Open media**, **Network stream** and a filterable queue
+  (right-click for play, copy location and remove; **Save queue** writes an M3U), a "Now playing"
+  header with **Audio & subtitles**, **Video** and **…** menus, and a welcome screen with your
+  recent files. The same menus open on right-click over the picture.
+- A seek bar with a time (and chapter name) under the pointer, chapter ticks and the A-B loop
+  shown on it; click the picture to pause, double-click for fullscreen, scroll for volume.
+- Native file pickers for media and subtitle files, drag and drop with a drop hint, and
+  spinners while a link is being opened.
+- A mini player, and always on top where the desktop allows it.
+- Preferences with every setting and a keyboard tab to rebind any key, with conflicts refused.
+- Media information, chapters, bookmarks and recent files in the menus.
 - Live streams from Twitch, Kick and other sites through [Streamlink](https://streamlink.github.io),
   run as a private relay on 127.0.0.1 so Streamlink's own ad handling applies, with a quality
   picker and the stream's title.
@@ -36,8 +46,8 @@ superiority is claimed.
 
 ## Not yet
 
-Online subtitle search, the equalizer and picture controls, seek-bar previews, the mini
-player, media keys and MPRIS, and packaging. `docs/migration.md` tracks each item.
+Online subtitle search, the equalizer and picture controls, seek-bar preview frames, media
+keys and MPRIS, and packaging. `docs/migration.md` tracks each item.
 
 ## Build and run
 
@@ -79,11 +89,13 @@ LUMEN_NETWORK_TESTS=1 cargo test --test streams   # optional, needs internet
 | S | Stop | Ctrl+B | Bookmark |
 | F, Esc | Fullscreen, leave | Ctrl+Shift+S | Screenshot |
 | Q | Show / hide queue | Delete | Remove queue item |
-| Ctrl+L | Open network stream | | |
+| Ctrl+L | Open network stream | Ctrl+O | Open media |
+| Ctrl+M | Mini player | Ctrl+T | Always on top |
+| Ctrl+, | Preferences | | |
 
-To rebind, add an entry under `keys` in `~/.config/lumen-rs/settings.json`, such as
-`"mute": "Ctrl+U"`. An empty string unbinds the action. The action names are listed in
-`src/keys.rs`.
+To rebind a key, open **… → Keyboard shortcuts** (or Preferences, Ctrl+,), click a shortcut and
+press the new keys. Escape cancels, and a key another action uses is refused. The choices are
+stored under `keys` in `~/.config/lumen-rs/settings.json`.
 
 ## Streams and privacy
 

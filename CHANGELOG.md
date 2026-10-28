@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 — A friendlier interface
+
+- Lumen's layout: sidebar with Open media, Network stream and a filterable queue; "Now playing"
+  header with Audio & subtitles, Video and … menus; framed video; transport row.
+- Welcome screen with recent files, drag-and-drop hint, spinners, and messages shown over the picture.
+- Seek bar with hover time and chapter name, chapter ticks and A-B loop band; click to pause,
+  double-click for fullscreen, scroll for volume, right-click for the menus.
+- Native file pickers, Save queue (M3U), Clear, queue context menu.
+- Preferences, with a keyboard tab that rebinds any key and refuses conflicts.
+- Mini player, always on top (not on Wayland), media information, chapter, bookmark and recent menus.
+- Load subtitle files, which are remembered for the file.
+- Escape closes the top-most dialog before it acts as a shortcut.
+- A hint when yt-dlp and Streamlink are missing for a site link.
+- Interface tests that click and type through the real interface without a window.
+
 ## 0.2.0 — Streams
 
 - Live streams through Streamlink, run as a local relay, with the stream title, a quality
