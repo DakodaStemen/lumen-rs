@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const RECENT_LIMIT: usize = 15;
+/// Most remembered files kept; the least recently saved are evicted first.
+const FILES_LIMIT: usize = 2000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -69,6 +71,8 @@ pub struct FileState {
     pub spu_delay: i64,
     pub bookmarks: Vec<i64>,
     pub subtitles: Vec<String>,
+    /// Save sequence number used for eviction. Old files.json lacks it (0 = oldest).
+    pub saved: u64,
 }
 
 pub struct Store {
@@ -113,14 +117,19 @@ impl Store {
     }
 
     pub fn file_state(&self, source: &str) -> FileState {
-        self.files
+        let mut state = self
+            .files
             .get(&Self::file_key(source))
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        state.saved = 0;
+        state
     }
 
-    pub fn save_file_state(&mut self, source: &str, state: FileState) {
+    pub fn save_file_state(&mut self, source: &str, mut state: FileState) {
+        state.saved = self.files.values().map(|f| f.saved).max().unwrap_or(0) + 1;
         self.files.insert(Self::file_key(source), state);
+        evict_oldest(&mut self.files, FILES_LIMIT);
         if let Some(dir) = &self.dir {
             write_json(&dir.join("files.json"), &self.files);
         }
@@ -133,10 +142,44 @@ impl Store {
     }
 
     pub fn remember_recent(&mut self, source: &str) {
-        self.settings.recent.retain(|s| s != source);
-        self.settings.recent.insert(0, source.to_owned());
+        let source = redact_source(source);
+        self.settings.recent.retain(|s| *s != source);
+        self.settings.recent.insert(0, source);
         self.settings.recent.truncate(RECENT_LIMIT);
         self.save_settings();
+    }
+}
+
+/// Drops userinfo, query and fragment from network URLs so secrets never reach
+/// settings.json. Local paths and other strings are returned unchanged.
+fn redact_source(source: &str) -> String {
+    let lower = source.to_ascii_lowercase();
+    let network = [
+        "http://", "https://", "rtsp://", "rtsps://", "rtmp://", "rtmps://",
+    ];
+    let Some(scheme) = network.iter().find(|s| lower.starts_with(**s)) else {
+        return source.to_owned();
+    };
+    let (head, rest) = source.split_at(scheme.len());
+    let end = rest.find(['?', '#']).unwrap_or(rest.len());
+    let rest = &rest[..end];
+    let (authority, path) = match rest.find('/') {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    format!("{head}{host}{path}")
+}
+
+/// Keeps at most `limit` entries, removing those with the lowest `saved`.
+fn evict_oldest(files: &mut BTreeMap<String, FileState>, limit: usize) {
+    if files.len() <= limit {
+        return;
+    }
+    let mut order: Vec<(u64, String)> = files.iter().map(|(k, v)| (v.saved, k.clone())).collect();
+    order.sort();
+    for (_, key) in order.into_iter().take(files.len() - limit) {
+        files.remove(&key);
     }
 }
 
@@ -144,16 +187,42 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
-/// Writes through a temporary file so a crash never leaves half a profile.
+fn create_private_dir(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let _ = fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir);
+    }
+    #[cfg(not(unix))]
+    let _ = fs::create_dir_all(dir);
+}
+
+/// Writes through a private (0600) temporary file, fsynced before the rename,
+/// so a crash never leaves half a profile.
 fn write_json<T: Serialize>(path: &Path, value: &T) {
+    use std::io::Write;
     let Ok(bytes) = serde_json::to_vec_pretty(value) else {
         return;
     };
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        create_private_dir(parent);
     }
     let temp = path.with_extension("json.tmp");
-    if fs::write(&temp, bytes).is_ok() && fs::rename(&temp, path).is_err() {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = options.open(&temp).and_then(|mut f| {
+        f.write_all(&bytes)?;
+        f.sync_all()
+    });
+    if written.is_err() || fs::rename(&temp, path).is_err() {
         let _ = fs::remove_file(&temp);
     }
 }
@@ -206,5 +275,73 @@ mod tests {
         fs::write(dir.path().join("files.json"), "[]").unwrap();
         let store = Store::open(dir.path().to_path_buf());
         assert_eq!(store.settings.volume, 80);
+    }
+
+    #[test]
+    fn recent_redacts_network_secrets() {
+        let mut store = Store::in_memory();
+        store.remember_recent("rtsp://user:pass@cam.local:554/live?token=abc#x");
+        store.remember_recent("https://u:p@example.com/v.mp4?sig=SECRET");
+        store.remember_recent("/home/me/a.mkv?keep");
+        assert_eq!(
+            store.settings.recent,
+            [
+                "/home/me/a.mkv?keep",
+                "https://example.com/v.mp4",
+                "rtsp://cam.local:554/live"
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn profile_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("profile");
+        let mut store = Store::open(dir.clone());
+        store.save_file_state("/a", FileState::default());
+        store.save_settings();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir.join("settings.json")), 0o600);
+        assert_eq!(mode(&dir.join("files.json")), 0o600);
+        assert_eq!(mode(&dir), 0o700);
+    }
+
+    #[test]
+    fn remembered_files_are_capped_evicting_oldest() {
+        let mut store = Store::in_memory();
+        for n in 0..FILES_LIMIT + 5 {
+            store.save_file_state(
+                &format!("/{n}"),
+                FileState {
+                    position: n as i64 + 1,
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(store.files.len(), FILES_LIMIT);
+        assert_eq!(store.file_state("/0"), FileState::default());
+        assert_eq!(store.file_state("/4"), FileState::default());
+        assert_eq!(store.file_state("/5").position, 6);
+        // Re-saving refreshes recency.
+        store.save_file_state("/5", FileState::default());
+        store.save_file_state("/new", FileState::default());
+        assert!(store.files.contains_key(&Store::file_key("/5")));
+        assert!(!store.files.contains_key(&Store::file_key("/6")));
+    }
+
+    #[test]
+    fn old_files_json_without_saved_field_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = Store::file_key("/old.mkv");
+        fs::write(
+            dir.path().join("files.json"),
+            format!(r#"{{"{key}": {{"position": 7, "length": 9}}}}"#),
+        )
+        .unwrap();
+        let store = Store::open(dir.path().to_path_buf());
+        let state = store.file_state("/old.mkv");
+        assert_eq!((state.position, state.length), (7, 9));
     }
 }
