@@ -1,5 +1,8 @@
 # Feature status
 
+> [!NOTE]
+> Back to the [README](../README.md). "Pending" means not built; "Implemented" says how far it was tested.
+
 Lumen has its own executable, app ID and profile (`~/.config/lumen-rs`).
 
 | Capability | Status |

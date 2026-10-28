@@ -2,6 +2,9 @@
 
 What has been run, and what has not.
 
+> [!WARNING]
+> The list under **Not verified** is as important as the one above it. Nothing here claims parity or speed gains.
+
 ## Run
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`: clean.

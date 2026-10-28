@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — A new look
+
+A visual refresh. No behavior changes.
+
+- New visual identity: palette, logo (`assets/lumen.svg`) and type.
+- Minimal interface: quieter chrome, so the picture leads.
+- Rewritten README and docs with diagrams and tables.
+
 ## 0.3.0 — A friendlier interface
 
 - Lumen's layout: sidebar with Open media, Network stream and a filterable queue; "Now playing"
