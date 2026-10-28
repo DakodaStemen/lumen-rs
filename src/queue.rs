@@ -74,7 +74,11 @@ fn percent_decode(text: &str) -> String {
 
 /// Turns `file:///a%20b.mkv` into `/a b.mkv`; anything else is returned unchanged.
 fn local_path(source: &str) -> String {
-    match source.strip_prefix("file://") {
+    match source
+        .get(..7)
+        .filter(|p| p.eq_ignore_ascii_case("file://"))
+        .map(|_| &source[7..])
+    {
         Some(rest) => percent_decode(rest.strip_prefix("localhost").unwrap_or(rest)),
         None => source.to_owned(),
     }
