@@ -128,8 +128,19 @@ impl Engine {
 
     // ----- loading and state -----
 
-    pub fn load(&self, source: &str, start_secs: Option<f64>, paused: bool) -> bool {
+    /// Starts `source`. `audio` is a separate audio stream to play alongside a video-only one.
+    pub fn load(
+        &self,
+        source: &str,
+        start_secs: Option<f64>,
+        paused: bool,
+        audio: Option<&str>,
+    ) -> bool {
         let mut options = Vec::new();
+        if let Some(audio) = audio {
+            // mpv's `%length%` prefix keeps commas and equals signs in URLs from splitting the list.
+            options.push(format!("audio-file=%{}%{audio}", audio.len()));
+        }
         if let Some(start) = start_secs {
             options.push(format!("start={start:.3}"));
         }
@@ -150,6 +161,11 @@ impl Engine {
 
     pub fn stop(&self) {
         self.command("stop", &[]);
+    }
+
+    /// The location mpv is playing, which for streams differs from the queue entry.
+    pub fn path(&self) -> Option<String> {
+        self.text("path")
     }
 
     /// True when nothing is loaded.

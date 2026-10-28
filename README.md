@@ -9,7 +9,7 @@ interface and libmpv for playback, so video is drawn natively on Wayland instead
 through XWayland. There is no Qt, Python or libVLC in this application.
 
 The existing Lumen release remains the reference application. This preview covers
-the playback core only and is not yet a feature-complete replacement. No performance
+playback and streams, and is not yet a feature-complete replacement. No performance
 superiority is claimed.
 
 ## Working today
@@ -24,12 +24,19 @@ superiority is claimed.
 - Audio and subtitle track switching, and audio and subtitle delay in 50 ms steps.
 - Screenshots, fullscreen with auto-hiding controls, and a status line.
 - A key for every action, each rebindable in the settings file.
+- Live streams from Twitch, Kick and other sites through [Streamlink](https://streamlink.github.io),
+  run as a private relay on 127.0.0.1 so Streamlink's own ad handling applies, with a quality
+  picker and the stream's title.
+- YouTube and other video sites through [yt-dlp](https://github.com/yt-dlp/yt-dlp), including
+  sites that serve video and audio separately.
+- [SponsorBlock](https://sponsor.ajay.app): sponsor reads, self-promotion and subscribe
+  reminders in YouTube videos are skipped (intros and outros optionally).
+- An "Open network stream" dialog (Ctrl+L) for HTTP, HTTPS, RTSP, RTMP, UDP and RTP links.
 - Its own profile in `~/.config/lumen-rs`; the Python version's settings are never read or changed.
 
 ## Not yet
 
-Live streams (Streamlink), YouTube and other sites (yt-dlp), SponsorBlock, online
-subtitle search, the equalizer and picture controls, seek-bar previews, the mini
+Online subtitle search, the equalizer and picture controls, seek-bar previews, the mini
 player, media keys and MPRIS, and packaging. `docs/migration.md` tracks each item.
 
 ## Build and run
@@ -42,11 +49,20 @@ sudo pacman -S mpv            # Arch; Debian and Ubuntu: libmpv-dev
 cargo run --release -- movie.mkv
 ```
 
+Streams need two optional programs on the `PATH`. Without them Lumen still plays files and
+direct links, but a Twitch or YouTube page will not open.
+
+```sh
+sudo pacman -S streamlink yt-dlp
+```
+
 The tests also need `ffmpeg` on the `PATH`; they generate their own media and are
-skipped when it is missing.
+skipped when it is missing. The Streamlink relay test is skipped without `streamlink`,
+and tests against real Twitch and YouTube run only with `LUMEN_NETWORK_TESTS=1`.
 
 ```sh
 cargo test
+LUMEN_NETWORK_TESTS=1 cargo test --test streams   # optional, needs internet
 ```
 
 ## Keys
@@ -63,10 +79,30 @@ cargo test
 | S | Stop | Ctrl+B | Bookmark |
 | F, Esc | Fullscreen, leave | Ctrl+Shift+S | Screenshot |
 | Q | Show / hide queue | Delete | Remove queue item |
+| Ctrl+L | Open network stream | | |
 
 To rebind, add an entry under `keys` in `~/.config/lumen-rs/settings.json`, such as
 `"mute": "Ctrl+U"`. An empty string unbinds the action. The action names are listed in
 `src/keys.rs`.
+
+## Streams and privacy
+
+Lumen goes online only when you ask it to: to play a link, or for SponsorBlock on a
+YouTube video. Which program handles a link:
+
+- Plain media and playlist links (`.mp4`, `.m3u8`, …), RTSP, RTMP and UDP go straight to mpv.
+- A link Streamlink has a site plugin for, such as Twitch or Kick, plays through Streamlink.
+  If Streamlink fails for any reason except "no playable streams" (an offline channel), Lumen
+  tries yt-dlp.
+- Anything else, and all YouTube links, is resolved by yt-dlp, and played directly if yt-dlp
+  cannot read it.
+
+SponsorBlock lookups send only a four-character prefix of a hash of the video id, so the
+service does not learn which video is playing. Segment data belongs to the SponsorBlock
+contributors (CC BY-NC-SA 4.0).
+
+Settings in `settings.json`: `stream_quality` (`"best"`, or a name such as `"720p60"`),
+`low_latency` (Twitch and Kick), `sponsorblock`, and `sponsorblock_intros`.
 
 ## Project layout
 

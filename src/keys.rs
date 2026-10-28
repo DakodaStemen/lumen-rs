@@ -51,6 +51,7 @@ actions! {
     Bookmark, "bookmark", "Add bookmark", "Ctrl+B";
     Fullscreen, "fullscreen", "Fullscreen", "F";
     ExitFullscreen, "exit_fullscreen", "Leave fullscreen", "Escape";
+    OpenUrl, "network", "Open network stream", "Ctrl+L";
     ToggleQueue, "toggle_queue", "Show / hide play queue", "Q";
     Remove, "remove", "Remove queue item", "Delete";
 }

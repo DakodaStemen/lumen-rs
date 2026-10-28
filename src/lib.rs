@@ -4,5 +4,7 @@ pub mod engine;
 pub mod keys;
 pub mod queue;
 pub mod session;
+pub mod sponsorblock;
 pub mod store;
+pub mod streams;
 pub mod video;

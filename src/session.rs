@@ -2,6 +2,7 @@
 //!
 //! A `Session` owns everything except the window, so it runs the same with or without a UI.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -9,7 +10,9 @@ use crate::clock::clock;
 use crate::engine::{Engine, TrackKind};
 use crate::keys::{Action, binding_text};
 use crate::queue::{Queue, is_url};
+use crate::sponsorblock::{self, Segment};
 use crate::store::{FileState, Store};
+use crate::streams::{Activity, Event, Plan, Streams, Tools};
 
 pub const RATES: [f64; 10] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0];
 const SAVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -17,6 +20,9 @@ const FLASH_FOR: Duration = Duration::from_millis(2500);
 /// Resuming is skipped for the first seconds and the last stretch of a file.
 const RESUME_AFTER_MS: i64 = 5_000;
 const RESUME_BEFORE_END_MS: i64 = 15_000;
+/// A sponsor segment is not worth skipping when this little of it is left.
+const SPONSOR_TAIL_MS: i64 = 500;
+const LONG_FLASH: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -28,10 +34,30 @@ pub enum State {
     Ended,
 }
 
+/// Sponsor segments for the video that is playing, and the ones already skipped.
+#[derive(Default)]
+struct Sponsor {
+    video_id: Option<String>,
+    segments: Vec<Segment>,
+    skipped: HashSet<Segment>,
+}
+
+/// What to do once a stream link has been resolved to something mpv can open.
+#[derive(Default, Clone, Copy)]
+struct Pending {
+    start_ms: Option<i64>,
+    paused: bool,
+}
+
 pub struct Session {
     pub engine: Engine,
     pub store: Store,
     pub queue: Queue,
+    pub streams: Streams,
+    /// True while playing through Streamlink's relay: a live stream, whatever length mpv reports.
+    live_relay: bool,
+    sponsor: Sponsor,
+    pending: Pending,
     loop_a: Option<i64>,
     loop_b: Option<i64>,
     rate: f64,
@@ -49,6 +75,10 @@ impl Session {
             engine,
             store,
             queue: Queue::default(),
+            streams: Streams::new(Tools::detect()),
+            live_relay: false,
+            sponsor: Sponsor::default(),
+            pending: Pending::default(),
             loop_a: None,
             loop_b: None,
             rate: 1.0,
@@ -80,6 +110,7 @@ impl Session {
         self.queue.remove(index);
         if removing_current {
             self.finished = true; // nothing left to save progress for
+            self.streams.stop();
             self.engine.stop();
         }
     }
@@ -102,13 +133,44 @@ impl Session {
             self.save_position(false);
         }
         self.engine.stop();
+        if self.queue.current != Some(index) {
+            self.streams.quality = None;
+        }
+        self.streams.stop();
+        self.sponsor = Sponsor::default();
+        self.live_relay = false;
         self.queue.current = Some(index);
         self.finished = false;
         self.was_started = false;
         self.clear_loop();
         self.store.remember_recent(&source);
+        self.pending = Pending { start_ms, paused };
 
-        let start = start_ms.or_else(|| self.resume_point(&source));
+        match self.streams.plan(&source) {
+            Plan::Direct => self.start(&source, start_ms, paused, None, true),
+            Plan::Resolve => {
+                let settings = &self.store.settings;
+                self.streams
+                    .begin(&source, &settings.stream_quality, settings.low_latency);
+            }
+        }
+    }
+
+    /// Opens `mrl` for the current queue entry. `resume` picks up where the file was left.
+    fn start(
+        &mut self,
+        mrl: &str,
+        start_ms: Option<i64>,
+        paused: bool,
+        audio: Option<&str>,
+        resume: bool,
+    ) {
+        let resumed = if resume {
+            self.source().and_then(|s| self.resume_point(&s))
+        } else {
+            None
+        };
+        let start = start_ms.or(resumed);
         if start_ms.is_none()
             && let Some(position) = start
         {
@@ -121,7 +183,7 @@ impl Session {
         self.restore_pending = true;
         if !self
             .engine
-            .load(&source, start.map(|ms| ms as f64 / 1000.0), paused)
+            .load(mrl, start.map(|ms| ms as f64 / 1000.0), paused, audio)
         {
             self.flash("Unable to open media. Check the file or stream.");
         }
@@ -135,6 +197,14 @@ impl Session {
         let state = self.store.file_state(source);
         let near_end = state.length > 0 && state.position >= state.length - RESUME_BEFORE_END_MS;
         (state.position > RESUME_AFTER_MS && !near_end).then_some(state.position)
+    }
+
+    /// A live stream has no length to seek within and no position worth resuming.
+    pub fn is_live(&self) -> bool {
+        self.live_relay
+            || (self.queue.current.is_some()
+                && !self.engine.idle()
+                && self.engine.duration_ms().is_none())
     }
 
     pub fn state(&self) -> State {
@@ -166,11 +236,13 @@ impl Session {
         if self.queue.current.is_some() {
             self.save_position(false);
         }
+        self.streams.stop();
         self.engine.stop();
     }
 
     /// Call regularly (Lumen does so every 200 ms). Drives resume, autosave and auto-advance.
     pub fn tick(&mut self) {
+        self.handle_stream_events();
         let state = self.state();
         if state == State::Playing {
             self.was_started = true;
@@ -180,8 +252,13 @@ impl Session {
                 self.restore_pending = false;
                 self.restore_file_settings();
             }
-            if state == State::Playing && self.last_save.elapsed() > SAVE_INTERVAL {
-                self.save_position(false);
+            if state == State::Playing {
+                if !self.sponsor.segments.is_empty() {
+                    self.skip_sponsors(self.position_ms());
+                }
+                if self.last_save.elapsed() > SAVE_INTERVAL {
+                    self.save_position(false);
+                }
             }
         }
         if state == State::Ended && !self.finished {
@@ -235,7 +312,8 @@ impl Session {
 
     pub fn save_position(&mut self, finished: bool) {
         let Some(source) = self.source() else { return };
-        let Some(length) = self.engine.duration_ms().filter(|l| *l > 0) else {
+        let length = self.engine.duration_ms().filter(|l| *l > 0);
+        let Some(length) = length.filter(|_| !self.live_relay) else {
             return; // live streams have no position worth resuming
         };
         if !self.was_started {
@@ -265,7 +343,7 @@ impl Session {
     }
 
     pub fn seek_ms(&mut self, ms: i64) {
-        if self.engine.seekable() {
+        if self.engine.seekable() && !self.live_relay {
             self.engine.seek_to_ms(ms.max(0));
         }
     }
@@ -470,15 +548,153 @@ impl Session {
         }
     }
 
+    // ----- streams -----
+
+    /// Acts on what the Streamlink, yt-dlp and SponsorBlock workers have reported.
+    fn handle_stream_events(&mut self) {
+        for event in self.streams.poll() {
+            let current = self.source();
+            let is_current = |page: &String| current.as_ref() == Some(page);
+            match event {
+                Event::Ready { page, url } if is_current(&page) => {
+                    self.live_relay = true;
+                    self.start(&url, None, false, None, false);
+                }
+                Event::Info { page, title, .. } if is_current(&page) => {
+                    self.set_current_title(&title)
+                }
+                Event::Resolved {
+                    page,
+                    extractor,
+                    id,
+                    title,
+                    video,
+                    audio,
+                } if is_current(&page) => {
+                    self.set_current_title(&title);
+                    if extractor == "Youtube" && self.store.settings.sponsorblock {
+                        self.sponsor.video_id = Some(id.clone());
+                        sponsorblock::fetch(id, self.sponsor_categories(), self.streams.sender());
+                    }
+                    let Pending { start_ms, paused } = self.pending;
+                    self.start(&video, start_ms, paused, audio.as_deref(), true);
+                }
+                Event::Direct { page, notice } if is_current(&page) => {
+                    if let Some(notice) = notice {
+                        self.flash(&notice);
+                    }
+                    let Pending { start_ms, paused } = self.pending;
+                    self.start(&page, start_ms, paused, None, true);
+                }
+                Event::Failed { page, message } if is_current(&page) => {
+                    self.flash_for(&message, LONG_FLASH)
+                }
+                Event::Sponsor { video_id, segments }
+                    if self.sponsor.video_id.as_ref() == Some(&video_id) =>
+                {
+                    self.flash(&format!(
+                        "SponsorBlock: {} segment(s) will be skipped",
+                        segments.len()
+                    ));
+                    self.sponsor.segments = segments;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn set_current_title(&mut self, title: &str) {
+        if let Some(item) = self.queue.current.and_then(|c| self.queue.items.get_mut(c))
+            && !title.is_empty()
+        {
+            item.title = title.to_owned();
+        }
+    }
+
+    pub fn sponsor_categories(&self) -> Vec<String> {
+        let extra = if self.store.settings.sponsorblock_intros {
+            &["intro", "outro"][..]
+        } else {
+            &[]
+        };
+        ["sponsor", "selfpromo", "interaction"]
+            .iter()
+            .chain(extra)
+            .map(|c| (*c).to_owned())
+            .collect()
+    }
+
+    /// Replaces the segments to skip for the current video.
+    pub fn set_sponsor_segments(&mut self, segments: Vec<Segment>) {
+        self.sponsor.segments = segments;
+        self.sponsor.skipped.clear();
+    }
+
+    /// Skips each sponsor segment once; seeking back into a skipped one is respected.
+    fn skip_sponsors(&mut self, position: i64) {
+        let Some(segment) = self
+            .sponsor
+            .segments
+            .iter()
+            .find(|s| {
+                !self.sponsor.skipped.contains(*s)
+                    && s.start <= position
+                    && position < s.end - SPONSOR_TAIL_MS
+            })
+            .cloned()
+        else {
+            return;
+        };
+        self.seek_ms(segment.end);
+        self.flash(&format!(
+            "Skipped {} ({})",
+            sponsorblock::label(&segment.category),
+            clock(segment.end - segment.start)
+        ));
+        self.sponsor.skipped.insert(segment);
+    }
+
+    /// Quality choices for the current stream, best first, once Streamlink has listed them.
+    pub fn stream_qualities(&self) -> Vec<String> {
+        let source = self.source().unwrap_or_default();
+        let listed = self.streams.qualities_for(&source);
+        if listed.is_empty() {
+            return Vec::new();
+        }
+        std::iter::once("best".to_owned())
+            .chain(listed.iter().rev().cloned())
+            .collect()
+    }
+
+    /// The quality in use: the menu choice for this file, else the saved default.
+    pub fn stream_quality(&self) -> String {
+        self.streams
+            .quality
+            .clone()
+            .unwrap_or_else(|| self.store.settings.stream_quality.clone())
+    }
+
+    /// Restarts the current stream at `quality`.
+    pub fn set_stream_quality(&mut self, quality: &str) {
+        self.streams.quality = Some(quality.to_owned());
+        if let Some(index) = self.queue.current {
+            self.play_index(index, None, false);
+        }
+    }
+
     // ----- status -----
 
     pub fn flash(&mut self, text: &str) {
+        self.flash_for(text, FLASH_FOR);
+    }
+
+    pub fn flash_for(&mut self, text: &str, duration: Duration) {
         let text = if text.chars().count() < 40 {
             text.to_uppercase()
         } else {
             text.to_owned()
         };
-        self.flash = Some((text, Instant::now() + FLASH_FOR));
+        self.flash = Some((text, Instant::now() + duration));
     }
 
     /// The status line: a recent message if there is one, otherwise the playback state.
@@ -490,6 +706,12 @@ impl Session {
         }
         if self.queue.current.is_none() {
             return String::new();
+        }
+        match self.streams.activity() {
+            Some(Activity::Streamlink) => return "CONNECTING WITH STREAMLINK…".to_owned(),
+            Some(Activity::Ytdlp) => return "RESOLVING LINK WITH YT-DLP…".to_owned(),
+            Some(Activity::Checking) => return "OPENING LINK…".to_owned(),
+            None => {}
         }
         let mut text = match self.state() {
             State::Playing => "PLAYING",

@@ -20,6 +20,12 @@ pub struct Settings {
     pub resume: bool,
     pub remember_tracks: bool,
     pub auto_next_folder: bool,
+    /// Streamlink quality: `best`, or a name such as `720p60`.
+    pub stream_quality: String,
+    pub low_latency: bool,
+    pub sponsorblock: bool,
+    /// Also skip intros and outros, not just sponsor reads.
+    pub sponsorblock_intros: bool,
     /// Key bindings by action id. An empty string unbinds the action.
     pub keys: BTreeMap<String, String>,
     pub recent: Vec<String>,
@@ -33,6 +39,10 @@ impl Default for Settings {
             resume: true,
             remember_tracks: true,
             auto_next_folder: true,
+            stream_quality: "best".to_owned(),
+            low_latency: true,
+            sponsorblock: true,
+            sponsorblock_intros: false,
             keys: BTreeMap::new(),
             recent: Vec::new(),
         }

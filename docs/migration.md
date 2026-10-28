@@ -7,10 +7,12 @@ not replace the old installation or migrate settings automatically.
 | Capability | Rust preview |
 | --- | --- |
 | Local file playback, hardware decoding | Implemented; headless playback tests, one manual run on Wayland |
-| Network URLs (HTTP, RTSP, RTMP, UDP) | Passed to mpv; not tested |
-| Live streams through Streamlink, Twitch ad filtering, quality picker | Pending |
-| YouTube and other sites through yt-dlp | Pending |
-| SponsorBlock | Pending |
+| Network URLs (HTTP, RTSP, RTMP, UDP) and the open-stream dialog | Implemented; HTTP HLS tested, RTSP, RTMP and UDP passed to mpv untested |
+| Live streams through Streamlink relay, stream title | Implemented; tested with a local HLS stream, and with a real Twitch channel on request |
+| Twitch ad filtering | Done by Streamlink itself; Lumen does not check that ads are removed |
+| Stream quality picker, low-latency mode | Implemented; the quality switch is tested on a local stream, low latency only passes Streamlink's flags |
+| YouTube and other sites through yt-dlp | Implemented; tested with a fake yt-dlp and with real YouTube on request |
+| SponsorBlock | Skipping tested; the lookup ran against the real service for one video, which had no segments |
 | Resume, per-file audio/subtitle choice and sync | Implemented; tested |
 | Recent files | Recorded; no menu yet |
 | Continue with next file in the folder | Implemented; tested, natural order |

@@ -10,6 +10,7 @@ use crate::clock::clock;
 use crate::engine::TrackKind;
 use crate::keys::{Action, Keymap};
 use crate::session::{RATES, Session, State};
+use crate::streams::is_network_url;
 use crate::video::Video;
 
 const ACCENT: Color32 = Color32::from_rgb(0xf8, 0x9b, 0x62);
@@ -23,6 +24,8 @@ pub struct App {
     video: Arc<Mutex<Option<Video>>>,
     show_queue: bool,
     selected: Option<usize>,
+    /// The "Open network stream" dialog: its text and whether the last entry was rejected.
+    url_dialog: Option<(String, bool)>,
     /// Seek-bar position (0..=1) while it is being dragged.
     scrubbing: Option<f64>,
     last_tick: Instant,
@@ -40,6 +43,7 @@ impl App {
             video: Arc::new(Mutex::new(Some(video))),
             show_queue: true,
             selected: None,
+            url_dialog: None,
             scrubbing: None,
             last_tick: Instant::now(),
             last_pointer_move: Instant::now(),
@@ -101,6 +105,7 @@ impl App {
             Action::ExitFullscreen => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false))
             }
+            Action::OpenUrl => self.url_dialog = Some((String::new(), false)),
             Action::ToggleQueue => self.show_queue = !self.show_queue,
             Action::Remove => {
                 if let Some(index) = self.selected.take() {
@@ -113,8 +118,8 @@ impl App {
     fn controls(&mut self, ui: &mut egui::Ui) {
         let position = self.session.position_ms();
         let duration = self.session.engine.duration_ms();
-        let seekable = self.session.engine.seekable();
-        let live = duration.is_none() && self.session.state() == State::Playing;
+        let live = self.session.is_live();
+        let seekable = self.session.engine.seekable() && !live;
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -124,6 +129,9 @@ impl App {
                 .map_or(position, |(f, d)| (f * d as f64) as i64);
             ui.monospace(clock(shown));
             let mut fraction = self.scrubbing.unwrap_or_else(|| {
+                if live {
+                    return 1.0; // the live edge
+                }
                 duration
                     .filter(|d| *d > 0)
                     .map_or(0.0, |d| (position as f64 / d as f64).clamp(0.0, 1.0))
@@ -199,6 +207,26 @@ impl App {
                         }
                     }
                 });
+            let qualities = s.stream_qualities();
+            if !qualities.is_empty() {
+                let current = s.stream_quality();
+                let mut chosen = None;
+                egui::ComboBox::from_id_salt("quality")
+                    .width(90.0)
+                    .selected_text(current.clone())
+                    .show_ui(ui, |ui| {
+                        for quality in &qualities {
+                            if ui.selectable_label(*quality == current, quality).clicked() {
+                                chosen = Some(quality.clone());
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Stream quality");
+                if let Some(quality) = chosen {
+                    s.set_stream_quality(&quality);
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .selectable_label(self.show_queue, "☰")
@@ -207,10 +235,66 @@ impl App {
                 {
                     self.show_queue = !self.show_queue;
                 }
+                if ui
+                    .button("🔗")
+                    .on_hover_text("Open network stream (Ctrl+L)")
+                    .clicked()
+                {
+                    self.url_dialog = Some((String::new(), false));
+                }
                 ui.label(RichText::new(s.status()).small().color(Color32::GRAY));
             });
         });
         ui.add_space(2.0);
+    }
+
+    fn url_dialog(&mut self, ctx: &egui::Context) {
+        let Some((text, rejected)) = self.url_dialog.as_mut() else {
+            return;
+        };
+        let mut open = true;
+        let mut submit = false;
+        egui::Window::new("Open network stream")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(440.0);
+                ui.label("Stream or video page URL (HTTP, HTTPS, RTSP, RTMP, UDP).");
+                ui.label(
+                    RichText::new(
+                        "Twitch, Kick and YouTube links play through Streamlink and yt-dlp.",
+                    )
+                    .small()
+                    .color(Color32::GRAY),
+                );
+                let field = ui.add(
+                    egui::TextEdit::singleline(text)
+                        .desired_width(420.0)
+                        .hint_text("https://"),
+                );
+                field.request_focus();
+                if *rejected {
+                    ui.colored_label(Color32::LIGHT_RED, "Enter a supported network URL.");
+                }
+                ui.horizontal(|ui| {
+                    submit = ui.button("Open").clicked()
+                        || (field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                });
+            });
+        let escaped = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if submit {
+            let url = text.trim().to_owned();
+            if is_network_url(&url) {
+                self.url_dialog = None;
+                self.session.add(&[url], true);
+            } else {
+                *rejected = true;
+            }
+        } else if !open || escaped {
+            self.url_dialog = None;
+        }
     }
 
     fn queue_panel(&mut self, ui: &mut egui::Ui) {
@@ -361,6 +445,7 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(Color32::BLACK))
             .show(ctx, |ui| self.video_view(ui, frame));
+        self.url_dialog(ctx);
 
         ctx.request_repaint_after(TICK);
     }

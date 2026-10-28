@@ -12,5 +12,14 @@ Core components include:
 - serde/serde_json: MIT OR Apache-2.0 — https://github.com/serde-rs
 - sha2: MIT OR Apache-2.0 — https://github.com/RustCrypto/hashes
 - fastrand: Apache-2.0 OR MIT — https://github.com/smol-rs/fastrand
+- ureq, with rustls: MIT OR Apache-2.0 — https://github.com/algesten/ureq
+
+Programs Lumen runs but does not bundle:
+
+- Streamlink: BSD-2-Clause — https://streamlink.github.io
+- yt-dlp: Unlicense — https://github.com/yt-dlp/yt-dlp
+
+SponsorBlock segment data comes from https://sponsor.ajay.app and is licensed
+CC BY-NC-SA 4.0 by its contributors.
 
 Rust does not remove licensing obligations for bundled assets, fonts or third-party code.

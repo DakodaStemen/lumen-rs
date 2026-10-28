@@ -8,6 +8,8 @@ without a display.
 | `engine.rs` | A typed wrapper over libmpv: load, seek, tracks, delays, chapters, A-B loop. No player policy. |
 | `session.rs` | Lumen's behaviour: queue playback, resume, per-file memory, auto-advance, status line. |
 | `queue.rs` | Queue order, shuffle, repeat, M3U import, natural-order folder continuation. |
+| `streams.rs` | Streamlink relay and yt-dlp resolution as subprocesses on worker threads. |
+| `sponsorblock.rs` | SponsorBlock lookup by hash prefix, and segment parsing. |
 | `store.rs` | Settings and per-file state as JSON, written atomically. |
 | `keys.rs` | Actions, default keys and user overrides. |
 | `clock.rs` | Time formatting and natural sort keys. |
@@ -33,5 +35,15 @@ advances the queue when a file ends. A-B looping is done by mpv itself.
 
 ## Streams
 
-Streamlink and yt-dlp are not used yet. When they are, they will run as subprocesses, as
-in the Python version, and mpv's own `ytdl` hook stays disabled so the two never compete.
+Streamlink and yt-dlp run as subprocesses, never as libraries, and mpv's own `ytdl` hook is
+disabled so the two never compete. Streamlink only strips Twitch's embedded ad segments when
+it reads the stream itself, so it runs as a private HTTP server on 127.0.0.1 and mpv plays that.
+
+`Streams::begin` starts a job on a worker thread. The job asks Streamlink whether a site plugin
+matches (`--can-handle-url-no-redirect`, which uses no network), then runs the relay or yt-dlp.
+It reports through a channel; `Session::tick` reads the events, and any from a job that has
+since been replaced are dropped. Every process a job starts is registered with it, so
+replacing or stopping the job kills them all.
+
+A stream served through the relay is treated as live: mpv reports the length of its buffer,
+but there is nothing to seek in and no position worth saving for resume.
