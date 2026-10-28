@@ -1,0 +1,48 @@
+# Flatpak manifest: UNTESTED DRAFT. It has not been built.
+# Try it with:
+#   flatpak-builder --user --install --force-clean build packaging/flatpak/io.github.DakodaStemen.Lumen.yml
+# Known gaps before it could go to Flathub:
+#   - cargo sources must be vendored (flatpak-cargo-generator.py Cargo.lock > cargo-sources.json)
+#     because the build has no network access;
+#   - libmpv needs its own dependency modules (ffmpeg, libplacebo, libass); see the io.mpv.Mpv manifest;
+#   - the desktop and metainfo IDs are renamed on install to match the app ID.
+app-id: io.github.DakodaStemen.Lumen
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+command: lumen-rs
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=xdg-videos:ro
+  - --filesystem=xdg-music:ro
+  - --own-name=org.mpris.MediaPlayer2.lumen_rs
+modules:
+  - name: mpv
+    buildsystem: meson
+    config-opts: [-Dlibmpv=true, -Dcplayer=false, -Dlua=disabled]
+    sources:
+      - type: git
+        url: https://github.com/mpv-player/mpv.git
+        tag: v0.40.0
+  - name: lumen-rs
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --offline
+      - install -Dm755 target/release/lumen-rs /app/bin/lumen-rs
+      - install -Dm644 packaging/linux/lumen-rs.desktop /app/share/applications/io.github.DakodaStemen.Lumen.desktop
+      - install -Dm644 packaging/linux/lumen-rs.metainfo.xml /app/share/metainfo/io.github.DakodaStemen.Lumen.metainfo.xml
+      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.DakodaStemen.Lumen.png
+      - sed -i 's/^Icon=.*/Icon=io.github.DakodaStemen.Lumen/' /app/share/applications/io.github.DakodaStemen.Lumen.desktop
+      - sed -i 's/lumen-rs.desktop/io.github.DakodaStemen.Lumen.desktop/' /app/share/metainfo/io.github.DakodaStemen.Lumen.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
