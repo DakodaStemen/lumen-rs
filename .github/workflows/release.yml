@@ -43,6 +43,14 @@ jobs:
           app=$(ls -d dist/*.app | head -1)
           dylibbundler -od -b -x "$app/Contents/MacOS/lumen-rs" -d "$app/Contents/Frameworks" -p @executable_path/../Frameworks
           hdiutil create -volname Lumen -srcfolder "$app" -ov -format UDZO dist/Lumen.dmg
+      - name: Verify DMG bundles libmpv
+        run: |
+          hdiutil attach dist/Lumen.dmg -mountpoint /tmp/lumen-dmg -nobrowse
+          find /tmp/lumen-dmg -name '*.dylib' | head -50
+          otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs
+          ls /tmp/lumen-dmg/*.app/Contents/Frameworks | grep -q libmpv
+          if otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs | grep -E '/opt/homebrew|/usr/local'; then echo "links Homebrew path"; exit 1; fi
+          hdiutil detach /tmp/lumen-dmg
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -72,6 +80,13 @@ jobs:
         run: |
           cargo packager --release --formats wix
           Get-ChildItem dist
+      - name: Verify MSI bundles libmpv
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
+          Start-Process msiexec -ArgumentList "/a `"$msi`" /qn TARGETDIR=$env:RUNNER_TEMP\\msi" -Wait
+          Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -File | ForEach-Object { "$($_.Length) $($_.FullName)" }
+          if (-not (Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -Filter libmpv-2.dll)) { throw "libmpv-2.dll missing from MSI" }
       - uses: actions/upload-artifact@v4
         with:
           name: windows
