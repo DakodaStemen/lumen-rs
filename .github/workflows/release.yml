@@ -1,8 +1,6 @@
 name: Package
 on:
   workflow_dispatch:
-  pull_request:
-    paths: [".github/workflows/release.yml", "packaging/**"]
   push:
     tags: ["v*"]
 permissions:
