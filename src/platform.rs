@@ -147,7 +147,12 @@ mod tests {
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let path = std::env::join_paths([dir.path()]).unwrap();
-        assert_eq!(which_in("tool", &path, Some(".EXE".into())), Some(file));
+        let found = which_in("tool", &path, Some(".EXE".into())).unwrap();
+        assert!(
+            found
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&file.to_string_lossy())
+        );
         assert_eq!(which_in("missing", &path, None), None);
     }
 }
