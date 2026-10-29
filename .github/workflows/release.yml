@@ -1,0 +1,127 @@
+name: Package
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+      - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev libfuse2 patchelf
+      - run: cargo install cargo-packager cargo-generate-rpm --locked
+      - run: cargo packager --release --formats deb,appimage
+      - run: cargo build --release --locked && cargo generate-rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            target/generate-rpm/*.rpm
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder
+      - run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Build
+        run: flatpak-builder --user --force-clean --disable-rofiles-fuse --install-deps-from=flathub --repo=repo build packaging/flatpak/io.github.DakodaStemen.Lumen.yml
+      - name: Bundle
+        run: flatpak build-bundle repo dist-lumen.flatpak io.github.DakodaStemen.Lumen
+      - name: Verify bundle runs
+        run: |
+          flatpak install --user -y --bundle dist-lumen.flatpak
+          flatpak run --command=lumen-rs io.github.DakodaStemen.Lumen --version | grep -q lumen-rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: dist-lumen.flatpak
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest   # arm64
+            arch: arm64
+          - runner: macos-15-intel # x86_64
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+      - run: |
+          brew install mpv dylibbundler
+          echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+      - run: cargo install cargo-packager --locked
+      - run: cargo packager --release --formats app
+      - name: Bundle libmpv into the app
+        run: |
+          app=$(ls -d dist/*.app | head -1)
+          dylibbundler -od -b -x "$app/Contents/MacOS/lumen-rs" -d "$app/Contents/Frameworks" -p @executable_path/../Frameworks
+          hdiutil create -volname Lumen -srcfolder "$app" -ov -format UDZO dist/Lumen-${{ matrix.arch }}.dmg
+      - name: Verify DMG bundles libmpv
+        run: |
+          hdiutil attach dist/Lumen-${{ matrix.arch }}.dmg -mountpoint /tmp/lumen-dmg -nobrowse
+          find /tmp/lumen-dmg -name '*.dylib' | head -50
+          lipo -info /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs | tee /tmp/lipo.txt
+          grep -q "architecture: ${{ matrix.arch }}" /tmp/lipo.txt
+          for f in /tmp/lumen-dmg/*.app/Contents/Frameworks/*.dylib; do lipo -info "$f" | grep -q "${{ matrix.arch }}" || { echo "wrong arch: $f"; exit 1; }; done
+          otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs
+          ls /tmp/lumen-dmg/*.app/Contents/Frameworks | grep -q libmpv
+          if otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs | grep -E '/opt/homebrew|/usr/local'; then echo "links Homebrew path"; exit 1; fi
+          hdiutil detach /tmp/lumen-dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/Lumen-${{ matrix.arch }}.dmg
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.99.1
+      - name: libmpv
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/windows-libmpv.ps1
+      - run: cargo install cargo-packager --locked
+      - run: cargo build --release --locked
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist/lumen-rs | Out-Null
+          Copy-Item target/release/lumen-rs.exe, "$env:LUMEN_LIBMPV_DIR/libmpv-2.dll", LICENSE, THIRD_PARTY_NOTICES.md dist/lumen-rs
+          Compress-Archive dist/lumen-rs dist/lumen-rs-windows-x64.zip
+      - name: MSI
+        shell: pwsh
+        run: |
+          # Windows-only: ship libmpv-2.dll next to the exe inside the MSI.
+          $res = 'resources = [{ src = "vendor/libmpv/libmpv-2.dll", target = "libmpv-2.dll" }]'
+          (Get-Content Cargo.toml) | ForEach-Object { $_; if ($_ -eq 'out-dir = "dist"') { $res } } | Set-Content Cargo.toml -Encoding utf8NoBOM
+          Select-String -Path Cargo.toml -Pattern '^resources'
+          if (-not (Select-String -Path Cargo.toml -Pattern '^resources' -Quiet)) { throw "resources not injected" }
+          cargo packager --release --formats wix
+          Get-ChildItem dist
+      - name: Verify MSI bundles libmpv
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
+          Start-Process msiexec -ArgumentList "/a `"$msi`" /qn TARGETDIR=$env:RUNNER_TEMP\\msi" -Wait
+          Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -File | ForEach-Object { "$($_.Length) $($_.FullName)" }
+          if (-not (Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -Filter libmpv-2.dll)) { throw "libmpv-2.dll missing from MSI" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*.msi

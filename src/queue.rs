@@ -150,7 +150,9 @@ impl Queue {
             let lower = source.to_lowercase();
             if (lower.ends_with(".m3u") || lower.ends_with(".m3u8")) && Path::new(&source).is_file()
             {
-                let resolved = fs::canonicalize(&source).unwrap_or_else(|_| PathBuf::from(&source));
+                let resolved = fs::canonicalize(&source)
+                    .map(strip_verbatim)
+                    .unwrap_or_else(|_| PathBuf::from(&source));
                 if !visited.insert(resolved.clone()) {
                     continue;
                 }
@@ -233,6 +235,15 @@ impl Queue {
         usize::try_from(target)
             .ok()
             .filter(|t| *t < self.items.len())
+    }
+}
+
+/// Windows `canonicalize` yields a `\\?\C:\..` verbatim path; drop the prefix so paths stay plain.
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
+        _ => path,
     }
 }
 
@@ -333,7 +344,9 @@ mod tests {
     #[test]
     fn imports_m3u_relative_to_the_playlist_and_survives_cycles() {
         let dir = tempfile::tempdir().unwrap();
-        let list = dir.path().join("list.m3u");
+        // macOS temp dirs sit behind a /var -> /private/var symlink
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
+        let list = dir_path.join("list.m3u");
         fs::write(
             &list,
             "#EXTM3U\nsong.mp3\nhttps://x.test/live.m3u8\n\nlist.m3u\n",
@@ -345,7 +358,7 @@ mod tests {
         assert_eq!(queue.items.len(), 2);
         assert_eq!(
             queue.items[0].source,
-            dir.path().join("song.mp3").to_string_lossy()
+            dir_path.join("song.mp3").to_string_lossy()
         );
         assert_eq!(queue.items[1].source, "https://x.test/live.m3u8");
     }
@@ -353,19 +366,28 @@ mod tests {
     #[test]
     fn playlist_files_only_queue_allowed_schemes() {
         let dir = tempfile::tempdir().unwrap();
-        let list = dir.path().join("evil.m3u");
+        // macOS temp dirs sit behind a /var -> /private/var symlink
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
+        let list = dir_path.join("evil.m3u");
+        let abs = dir_path
+            .join("abs")
+            .join("c.mp3")
+            .to_string_lossy()
+            .into_owned();
         fs::write(
             &list,
-            "#EXTM3U\nsmb://host/share/x.mkv\nedl://%5%http://a;!new_stream\nlavfi://sine\n\
+            format!(
+                "#EXTM3U\nsmb://host/share/x.mkv\nedl://%5%http://a;!new_stream\nlavfi://sine\n\
              ftp://h/x.mp3\nFILE:///tmp/ok.mp3\n  HTTP://x.test/a.mp3  \nrtsp://cam/s\n\
-             Rtmp://l/app\nudp://@:1\nrtp://239.0.0.1\nhttps://x.test/b.mp3\nrel.mp3\n/abs/c.mp3\n\
-             fd://3\nmemory://x\ncdda://\ndvd://1\n",
+             Rtmp://l/app\nudp://@:1\nrtp://239.0.0.1\nhttps://x.test/b.mp3\nrel.mp3\n{abs}\n\
+             fd://3\nmemory://x\ncdda://\ndvd://1\n"
+            ),
         )
         .unwrap();
         let mut queue = Queue::default();
         queue.add(&[list.to_string_lossy().into_owned()]);
         let sources: Vec<&str> = queue.items.iter().map(|i| i.source.as_str()).collect();
-        let rel = dir.path().join("rel.mp3").to_string_lossy().into_owned();
+        let rel = dir_path.join("rel.mp3").to_string_lossy().into_owned();
         assert_eq!(
             sources,
             [
@@ -377,7 +399,7 @@ mod tests {
                 "rtp://239.0.0.1",
                 "https://x.test/b.mp3",
                 rel.as_str(),
-                "/abs/c.mp3",
+                abs.as_str(),
             ]
         );
     }
@@ -404,7 +426,9 @@ mod tests {
     #[test]
     fn saved_queues_read_back_the_same() {
         let dir = tempfile::tempdir().unwrap();
-        let queue = queue_of(&["/media/a b.mkv", "https://x.test/live.m3u8", "/media/c.mp3"]);
+        let a = dir.path().join("a b.mkv").to_string_lossy().into_owned();
+        let c = dir.path().join("c.mp3").to_string_lossy().into_owned();
+        let queue = queue_of(&[&a, "https://x.test/live.m3u8", &c]);
         let list = dir.path().join("saved.m3u");
         fs::write(&list, queue.to_m3u()).unwrap();
         let mut restored = Queue::default();

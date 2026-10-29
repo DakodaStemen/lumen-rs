@@ -87,15 +87,7 @@ impl Tools {
     }
 }
 
-fn which(name: &str) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|dir| dir.join(name))
-        .find(|p| {
-            p.metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
-}
+use crate::platform::which;
 
 /// Where a job starts. `Auto` decides by asking Streamlink whether a site plugin matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

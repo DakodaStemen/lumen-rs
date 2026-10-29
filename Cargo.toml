@@ -9,7 +9,7 @@ repository = "https://github.com/DakodaStemen/lumen-rs"
 
 [dependencies]
 anyhow = "1"
-eframe = { version = "0.33", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "accesskit"] }
+eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
 fastrand = "2"
 libc = "0.2"
 libmpv2 = "6"
@@ -19,6 +19,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.11"
 ureq = "3"
 
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+eframe = { version = "0.33", default-features = false, features = ["x11", "wayland"] }
+
 [dev-dependencies]
 egui_kittest = "0.33"
 tempfile = "3"
@@ -26,3 +29,43 @@ tempfile = "3"
 [profile.release]
 lto = "thin"
 strip = true
+
+# Installers: `cargo install cargo-packager --locked && cargo packager --release`
+# (MSI/NSIS on Windows, dmg on macOS, AppImage/deb on Linux). RPM is built with
+# `cargo generate-rpm`. See packaging/README.md for libmpv bundling and signing.
+[package.metadata.packager]
+product-name = "Lumen"
+identifier = "io.github.DakodaStemen.Lumen"
+publisher = "DakodaStemen"
+category = "Video"
+long-description = "A native media player built on libmpv. Every format. Every frame."
+icons = ["assets/icon-32.png", "assets/icon-64.png", "assets/icon.png"]
+license-file = "LICENSE"
+before-packaging-command = "cargo build --release --locked"
+out-dir = "dist"
+
+[[package.metadata.packager.file-associations]]
+extensions = ["mp4", "mkv", "webm", "avi", "mov", "m4v", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg", "ogv", "3gp", "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "wma", "alac", "ape"]
+description = "Media file"
+role = "viewer"
+
+[package.metadata.packager.deb]
+depends = ["libmpv2 | libmpv1", "libgl1"]
+desktop-template = "packaging/linux/lumen-rs.desktop"
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+# libmpv.dylib and its dependency closure are copied into the bundle by dylibbundler (see release workflow).
+
+[package.metadata.packager.appimage]
+# AppImages must carry libmpv; the release workflow runs linuxdeploy to add it.
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/lumen-rs", dest = "/usr/bin/lumen-rs", mode = "755" },
+  { source = "packaging/linux/lumen-rs.desktop", dest = "/usr/share/applications/lumen-rs.desktop", mode = "644" },
+  { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/256x256/apps/lumen-rs.png", mode = "644" },
+  { source = "LICENSE", dest = "/usr/share/licenses/lumen-rs/LICENSE", mode = "644" },
+]
+[package.metadata.generate-rpm.requires]
+mpv-libs = "*"
