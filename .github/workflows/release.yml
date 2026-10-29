@@ -79,7 +79,10 @@ jobs:
         shell: pwsh
         run: |
           # Windows-only: ship libmpv-2.dll next to the exe inside the MSI.
-          (Get-Content Cargo.toml -Raw) -replace 'out-dir = "dist"', 'out-dir = "dist"`nresources = [{ src = "vendor/libmpv/libmpv-2.dll", target = "libmpv-2.dll" }]' | Set-Content Cargo.toml -NoNewline
+          $res = 'resources = [{ src = "vendor/libmpv/libmpv-2.dll", target = "libmpv-2.dll" }]'
+          (Get-Content Cargo.toml) | ForEach-Object { $_; if ($_ -eq 'out-dir = "dist"') { $res } } | Set-Content Cargo.toml -Encoding utf8NoBOM
+          Select-String -Path Cargo.toml -Pattern '^resources'
+          if (-not (Select-String -Path Cargo.toml -Pattern '^resources' -Quiet)) { throw "resources not injected" }
           cargo packager --release --formats wix
           Get-ChildItem dist
       - name: Verify MSI bundles libmpv
