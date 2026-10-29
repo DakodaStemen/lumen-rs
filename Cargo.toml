@@ -47,7 +47,7 @@ out-dir = "dist"
 [[package.metadata.packager.file-associations]]
 extensions = ["mp4", "mkv", "webm", "avi", "mov", "m4v", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg", "ogv", "3gp", "mp3", "flac", "wav", "ogg", "oga", "opus", "m4a", "aac", "wma", "alac", "ape"]
 description = "Media file"
-role = "Viewer"
+role = "viewer"
 
 [package.metadata.packager.deb]
 depends = ["libmpv2 | libmpv1", "libgl1"]
