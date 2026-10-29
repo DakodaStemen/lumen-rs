@@ -345,7 +345,7 @@ mod tests {
     fn imports_m3u_relative_to_the_playlist_and_survives_cycles() {
         let dir = tempfile::tempdir().unwrap();
         // macOS temp dirs sit behind a /var -> /private/var symlink
-        let dir_path = fs::canonicalize(dir.path()).unwrap();
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
         let list = dir_path.join("list.m3u");
         fs::write(
             &list,
@@ -367,7 +367,7 @@ mod tests {
     fn playlist_files_only_queue_allowed_schemes() {
         let dir = tempfile::tempdir().unwrap();
         // macOS temp dirs sit behind a /var -> /private/var symlink
-        let dir_path = fs::canonicalize(dir.path()).unwrap();
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
         let list = dir_path.join("evil.m3u");
         let abs = dir_path
             .join("abs")
