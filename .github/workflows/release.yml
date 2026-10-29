@@ -2,7 +2,7 @@ name: Package
 on:
   workflow_dispatch:
   pull_request:
-    paths: [".github/workflows/release.yml"]
+    paths: [".github/workflows/release.yml", "packaging/**"]
   push:
     tags: ["v*"]
 permissions:
@@ -26,8 +26,34 @@ jobs:
             dist/*.deb
             dist/*.AppImage
             target/generate-rpm/*.rpm
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder
+      - run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Build
+        run: flatpak-builder --user --force-clean --disable-rofiles-fuse --install-deps-from=flathub --repo=repo build packaging/flatpak/io.github.DakodaStemen.Lumen.yml
+      - name: Bundle
+        run: flatpak build-bundle repo dist-lumen.flatpak io.github.DakodaStemen.Lumen
+      - name: Verify bundle runs
+        run: |
+          flatpak install --user -y --bundle dist-lumen.flatpak
+          flatpak run --command=lumen-rs io.github.DakodaStemen.Lumen --version | grep -q lumen-rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: dist-lumen.flatpak
   macos:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest   # arm64
+            arch: arm64
+          - runner: macos-15-intel # x86_64
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -42,19 +68,22 @@ jobs:
         run: |
           app=$(ls -d dist/*.app | head -1)
           dylibbundler -od -b -x "$app/Contents/MacOS/lumen-rs" -d "$app/Contents/Frameworks" -p @executable_path/../Frameworks
-          hdiutil create -volname Lumen -srcfolder "$app" -ov -format UDZO dist/Lumen.dmg
+          hdiutil create -volname Lumen -srcfolder "$app" -ov -format UDZO dist/Lumen-${{ matrix.arch }}.dmg
       - name: Verify DMG bundles libmpv
         run: |
-          hdiutil attach dist/Lumen.dmg -mountpoint /tmp/lumen-dmg -nobrowse
+          hdiutil attach dist/Lumen-${{ matrix.arch }}.dmg -mountpoint /tmp/lumen-dmg -nobrowse
           find /tmp/lumen-dmg -name '*.dylib' | head -50
+          lipo -info /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs | tee /tmp/lipo.txt
+          grep -q "architecture: ${{ matrix.arch }}" /tmp/lipo.txt
+          for f in /tmp/lumen-dmg/*.app/Contents/Frameworks/*.dylib; do lipo -info "$f" | grep -q "${{ matrix.arch }}" || { echo "wrong arch: $f"; exit 1; }; done
           otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs
           ls /tmp/lumen-dmg/*.app/Contents/Frameworks | grep -q libmpv
           if otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs | grep -E '/opt/homebrew|/usr/local'; then echo "links Homebrew path"; exit 1; fi
           hdiutil detach /tmp/lumen-dmg
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
-          path: dist/Lumen.dmg
+          name: macos-${{ matrix.arch }}
+          path: dist/Lumen-${{ matrix.arch }}.dmg
   windows:
     runs-on: windows-latest
     steps:
