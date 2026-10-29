@@ -1,6 +1,6 @@
 //! Settings and per-file memory (resume point, tracks, sync offsets, bookmarks).
 //!
-//! Lumen Rust keeps its own profile and never touches the Python version's settings.
+//! Lumen keeps its own profile in its own settings directory.
 
 use std::collections::BTreeMap;
 use std::fs;
