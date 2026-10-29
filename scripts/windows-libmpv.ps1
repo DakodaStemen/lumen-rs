@@ -31,7 +31,7 @@ $def = Join-Path $Dest "mpv.def"
 @("LIBRARY libmpv-2", "EXPORTS") + $names | Set-Content -Encoding ascii $def
 & $libexe /nologo /machine:x64 "/def:$def" "/out:$Dest\mpv.lib"
 if ($LASTEXITCODE -ne 0) { throw "lib.exe failed" }
-Copy-Item $dll.FullName $Dest -Force
+if ((Split-Path $dll.FullName) -ne $Dest) { Copy-Item $dll.FullName $Dest -Force }
 if ($env:GITHUB_ENV) {
   "LUMEN_LIBMPV_DIR=$Dest" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
   "LIB=$Dest;$env:LIB" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
