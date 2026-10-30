@@ -172,6 +172,26 @@ impl Engine {
         self.command("stop", &[]);
     }
 
+    /// Drains mpv's event queue. Returns `Some(true)` when the latest file event was
+    /// "file loaded", `Some(false)` when a file has since started or ended, and `None`
+    /// when no file event arrived.
+    ///
+    /// `stop` and `loadfile` are asynchronous: for a moment after them mpv still reports the
+    /// previous file's state (newer builds keep it longer), so only this event says the file
+    /// just asked for is the one playing. Only `Session` calls this, from one thread.
+    pub fn poll_file_loaded(&self) -> Option<bool> {
+        use libmpv2::events::Event;
+        let mut loaded = None;
+        while let Some(event) = self.mpv.wait_event(0.0) {
+            match event {
+                Ok(Event::FileLoaded) => loaded = Some(true),
+                Ok(Event::StartFile | Event::EndFile(_)) | Err(_) => loaded = Some(false),
+                _ => {}
+            }
+        }
+        loaded
+    }
+
     /// The location mpv is playing, which for streams differs from the queue entry.
     pub fn path(&self) -> Option<String> {
         self.text("path")
