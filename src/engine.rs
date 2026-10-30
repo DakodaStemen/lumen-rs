@@ -68,6 +68,29 @@ fn has_loadfile_index(version: &str) -> bool {
     }
 }
 
+/// Options that keep mpv from acting on anything but what Lumen hands it. libmpv defaults
+/// most of these already; they are set explicitly so a distribution build or a future default
+/// cannot change them.
+pub const LOCKDOWN: [(&str, &str); 5] = [
+    // No mpv.conf, input.conf or per-file configs from the user's mpv directory.
+    ("config", "no"),
+    // No Lua/JS scripts from `~/.config/mpv/scripts`.
+    ("load-scripts", "no"),
+    // Streams are resolved by Lumen itself, never by mpv's built-in yt-dlp hook.
+    ("ytdl", "no"),
+    // No JSON IPC socket another local process could drive the player through.
+    ("input-ipc-server", ""),
+    // Playlists mpv opens itself may not reach protocols it considers unsafe.
+    ("load-unsafe-playlists", "no"),
+];
+
+fn lock_down(init: &libmpv2::MpvInitializer) -> libmpv2::Result<()> {
+    for (name, value) in LOCKDOWN {
+        init.set_property(name, value)?;
+    }
+    Ok(())
+}
+
 impl Engine {
     pub fn new(output: Output, volume: u32) -> Result<Self> {
         // mpv refuses to start unless numbers are parsed with the C locale.
@@ -88,8 +111,7 @@ impl Engine {
             init.set_property("volume", i64::from(volume.min(200)))?;
             init.set_property("input-default-bindings", "no")?;
             init.set_property("input-vo-keyboard", "no")?;
-            // Streams are resolved by Lumen itself, never by mpv's built-in hook.
-            init.set_property("ytdl", "no")?;
+            lock_down(&init)?;
             Ok(())
         })
         .map_err(|e| anyhow!("could not start mpv: {e}"))?;
@@ -442,7 +464,20 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::has_loadfile_index;
+    use super::{Engine, LOCKDOWN, Output, has_loadfile_index};
+
+    #[test]
+    fn mpv_starts_locked_down() {
+        let engine = Engine::new(Output::Headless, 100).expect("mpv starts");
+        for (name, value) in LOCKDOWN {
+            assert_eq!(
+                engine.text(name).as_deref(),
+                Some(value),
+                "{name} should be {value:?}"
+            );
+        }
+        assert_eq!(engine.text("input-default-bindings").as_deref(), Some("no"));
+    }
 
     #[test]
     fn detects_the_loadfile_signature_from_the_mpv_version() {
