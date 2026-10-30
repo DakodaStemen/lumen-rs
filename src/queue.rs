@@ -30,18 +30,156 @@ pub fn is_url(source: &str) -> bool {
 }
 
 /// Schemes a playlist file may point at. Anything else with `://` (smb, edl, lavfi, ftp, ...) is
-/// dropped, since mpv would open it as given.
-const PLAYLIST_SCHEMES: [&str; 7] = ["http", "https", "rtsp", "rtmp", "udp", "rtp", "file"];
+/// dropped, since mpv would open it as given. `file://` entries are decoded to a local path first.
+const PLAYLIST_SCHEMES: [&str; 6] = ["http", "https", "rtsp", "rtmp", "udp", "rtp"];
 
-/// Whether an entry read from a playlist file may be queued: a path, or a link with an allowed scheme.
-fn playlist_entry_allowed(entry: &str) -> bool {
-    match entry.split_once("://") {
-        None => true,
-        Some((scheme, _)) => {
-            let scheme = scheme.trim().to_ascii_lowercase();
-            PLAYLIST_SCHEMES.contains(&scheme.as_str())
+/// What a line read from a playlist file queues as, or `None` when it is refused.
+///
+/// Playlists are untrusted input, so unlike sources the user opens directly they may only name
+/// local paths (relative ones resolve against `base`, the playlist's folder) or network links
+/// with an allowed scheme to a host that is not this machine or its local network. The check
+/// runs on the final value: `file://` is decoded first, so `file://lavfi%3A%2F%2Fsine` cannot
+/// smuggle a protocol past it.
+fn playlist_entry(line: &str, base: &Path) -> Option<String> {
+    let is_file_url = line
+        .get(..7)
+        .is_some_and(|p| p.eq_ignore_ascii_case("file://"));
+    let value = local_path(line);
+    if is_url(&value) {
+        // A decoded `file://` value must be a plain path, never another link.
+        if is_file_url || !network_entry_allowed(&value) {
+            return None;
+        }
+        return Some(value);
+    }
+    if is_share_path(&value) {
+        return None;
+    }
+    let path = Path::new(&value);
+    // A `file:///x` path is rooted even where it is not absolute (Windows, no drive): keep it
+    // as mpv would open it rather than moving it under the playlist's folder.
+    let resolved = if path.is_absolute() || (is_file_url && path.has_root()) {
+        value
+    } else {
+        base.join(path).to_string_lossy().into_owned()
+    };
+    (!is_url(&resolved) && !is_share_path(&resolved)).then_some(resolved)
+}
+
+/// `\\host\share`, `//host/share` and Windows device paths (`\\?\`, `\\.\`) reach other
+/// machines or devices, so a playlist may not name them.
+fn is_share_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('/' | '\\'), Some('/' | '\\'))
+    )
+}
+
+/// An allowed scheme, and a host that is not loopback, link-local or a private address.
+fn network_entry_allowed(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    PLAYLIST_SCHEMES.contains(&scheme.as_str()) && !is_local_host(&host_of(rest))
+}
+
+/// The host part of everything after `scheme://`, lower-cased and without user info or port.
+fn host_of(rest: &str) -> String {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = match host_port.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host_port.split(':').next().unwrap_or(""),
+    };
+    let host = percent_decode(host).to_ascii_lowercase();
+    // Drop an IPv6 zone such as `%eth0`, and the trailing dot of a fully qualified name.
+    let host = host.split('%').next().unwrap_or("");
+    host.trim_end_matches('.').to_owned()
+}
+
+/// Whether a playlist host names this machine or its local network.
+///
+/// Only names that need no lookup are caught (`localhost`, literal addresses in any form
+/// `inet_aton` accepts). A public name that resolves to a private address is not; that needs
+/// a resolver and is out of scope here. An empty host (`udp://@:1234`) listens locally rather
+/// than connecting anywhere, so it is allowed.
+fn is_local_host(host: &str) -> bool {
+    use std::net::{IpAddr, Ipv6Addr};
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<Ipv6Addr>() {
+        return is_local_ip(IpAddr::V6(ip));
+    }
+    parse_ipv4_loose(host).is_some_and(|ip| is_local_ip(IpAddr::V4(ip)))
+}
+
+fn is_local_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback()
+                || v4.is_unspecified()
+                || v4.is_private()
+                || v4.is_link_local()
+                || a == 0
+                || (a == 100 && (64..128).contains(&b)) // carrier-grade NAT, 100.64.0.0/10
+        }
+        IpAddr::V6(v6) => {
+            // IPv4-mapped `::ffff:a.b.c.d` and IPv4-compatible `::a.b.c.d` (which covers `::`
+            // and `::1`, as 0.0.0.0 and 0.0.0.1) are judged as the IPv4 address they carry.
+            if let Some(v4) = v6.to_ipv4() {
+                return is_local_ip(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (first & 0xfe00) == 0xfc00 // unique local, fc00::/7
+                || (first & 0xffc0) == 0xfe80 // link-local, fe80::/10
+                || (first & 0xffc0) == 0xfec0 // deprecated site-local, fec0::/10
         }
     }
+}
+
+/// Parses an IPv4 address the way `inet_aton` (and so the network stack mpv uses) does:
+/// `127.0.0.1`, `127.1`, `2130706433`, `0x7f.0.0.1` and `0177.0.0.1` all name loopback.
+fn parse_ipv4_loose(host: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<u32> = host
+        .split('.')
+        .map(|part| {
+            let (digits, radix) = match part.strip_prefix("0x").or_else(|| part.strip_prefix("0X"))
+            {
+                Some(hex) => (hex, 16),
+                None if part.len() > 1 && part.starts_with('0') => (&part[1..], 8),
+                None => (part, 10),
+            };
+            if digits.is_empty() && radix != 16 {
+                return None;
+            }
+            if digits.is_empty() {
+                return Some(0);
+            }
+            u32::from_str_radix(digits, radix).ok()
+        })
+        .collect::<Option<_>>()?;
+    let (last, head) = parts.split_last()?;
+    if head.len() > 3 || head.iter().any(|p| *p > 255) {
+        return None;
+    }
+    let rest_bits = 8 * (4 - head.len() as u32);
+    if rest_bits < 32 && *last >> rest_bits != 0 {
+        return None;
+    }
+    let value = head
+        .iter()
+        .fold(0u32, |acc, p| (acc << 8) | p)
+        .checked_shl(rest_bits)
+        .unwrap_or(0)
+        | last;
+    Some(std::net::Ipv4Addr::from(value))
 }
 
 fn is_media(path: &Path) -> bool {
@@ -164,14 +302,7 @@ impl Queue {
                     .lines()
                     .map(str::trim)
                     .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                    .filter(|line| playlist_entry_allowed(line))
-                    .map(|line| {
-                        if is_url(line) || Path::new(line).is_absolute() {
-                            line.to_owned()
-                        } else {
-                            base.join(line).to_string_lossy().into_owned()
-                        }
-                    })
+                    .filter_map(|line| playlist_entry(line, &base))
                     .collect();
                 self.add_all(&entries, visited);
                 continue;
@@ -402,6 +533,122 @@ mod tests {
                 abs.as_str(),
             ]
         );
+    }
+
+    #[test]
+    fn decoded_file_urls_cannot_smuggle_other_protocols() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
+        let list = dir_path.join("smuggle.m3u");
+        fs::write(
+            &list,
+            "#EXTM3U\nfile://lavfi%3A%2F%2Fsine\nfile://smb%3A%2F%2Fhost%2Fshare%2Fx.mkv\n\
+             file://edl%3A%2F%2F%255%25http%3A%2F%2Fa\nFILE://ftp%3A%2F%2Fh%2Fx.mp3\n\
+             file:///lavfi%3A%2F%2Fsine\nfile://file%3A%2F%2Flavfi%253A%252F%252Fsine\n\
+             fIlE://localhost/smb%3A%2F%2Fh%2Fx\nfile:////host/share/x.mkv\n\
+             file://%5C%5Chost%5Cshare%5Cx.mkv\nfile:///tmp/fine%20one.mp3\n",
+        )
+        .unwrap();
+        let mut queue = Queue::default();
+        queue.add(&[list.to_string_lossy().into_owned()]);
+        let sources: Vec<&str> = queue.items.iter().map(|i| i.source.as_str()).collect();
+        assert_eq!(sources, ["/tmp/fine one.mp3"]);
+    }
+
+    #[test]
+    fn playlist_files_cannot_name_network_shares() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
+        let list = dir_path.join("unc.m3u");
+        fs::write(
+            &list,
+            "\\\\host\\share\\x.mkv\n//host/share/x.mkv\n\\\\?\\UNC\\host\\s\\x.mkv\n\
+             \\\\.\\pipe\\x\n/\\host\\share\\x.mkv\n\\/host/x.mkv\nok.mp3\n",
+        )
+        .unwrap();
+        let mut queue = Queue::default();
+        queue.add(&[list.to_string_lossy().into_owned()]);
+        let sources: Vec<&str> = queue.items.iter().map(|i| i.source.as_str()).collect();
+        let ok = dir_path.join("ok.mp3").to_string_lossy().into_owned();
+        assert_eq!(sources, [ok.as_str()]);
+    }
+
+    #[test]
+    fn playlist_links_cannot_reach_this_machine_or_its_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
+        let list = dir_path.join("lan.m3u");
+        let refused = [
+            "http://localhost/a.mp3",
+            "http://LOCALHOST.:8080/a.mp3",
+            "http://api.localhost/a.mp3",
+            "http://127.0.0.1/a.mp3",
+            "http://127.1/a.mp3",
+            "http://2130706433/a.mp3",
+            "http://0x7f.0.0.1/a.mp3",
+            "http://0177.0.0.1/a.mp3",
+            "http://user:pw@127.0.0.1:9/a.mp3",
+            "http://%31%32%37.0.0.1/a.mp3",
+            "http://0.0.0.0:8000/",
+            "https://10.0.0.5/a.mp3",
+            "rtsp://172.16.3.4/cam",
+            "rtsp://192.168.1.10:554/cam",
+            "http://169.254.169.254/latest/meta-data",
+            "http://100.64.0.1/a.mp3",
+            "http://[::1]/a.mp3",
+            "http://[::]/a.mp3",
+            "http://[::ffff:127.0.0.1]/a.mp3",
+            "http://[::ffff:192.168.0.1]/a.mp3",
+            "http://[fd00::1]/a.mp3",
+            "http://[fe80::1%25eth0]/a.mp3",
+            "udp://127.0.0.1:1234",
+            "rtmp://192.168.0.2/app",
+        ];
+        let allowed = [
+            "https://x.test/a.mp3",
+            "http://8.8.8.8/a.mp3",
+            "http://[2001:db8::1]/a.mp3",
+            "http://172.32.0.1/a.mp3",
+            "rtp://239.0.0.1",
+            "udp://@:1234",
+            "https://127.0.0.1.example.com/a.mp3",
+        ];
+        let text: String = refused
+            .iter()
+            .chain(allowed.iter())
+            .map(|l| format!("{l}\n"))
+            .collect();
+        fs::write(&list, text).unwrap();
+        let mut queue = Queue::default();
+        queue.add(&[list.to_string_lossy().into_owned()]);
+        let sources: Vec<&str> = queue.items.iter().map(|i| i.source.as_str()).collect();
+        assert_eq!(sources, allowed);
+    }
+
+    #[test]
+    fn direct_links_to_local_hosts_stay_allowed() {
+        let queue = queue_of(&["http://127.0.0.1:8080/live.ts", "file:///tmp/a.mkv"]);
+        assert_eq!(
+            queue.items.len(),
+            2,
+            "a link the user typed is theirs to open"
+        );
+    }
+
+    #[test]
+    fn loose_ipv4_forms_parse_like_inet_aton() {
+        let ip = |s: &str| parse_ipv4_loose(s).map(|a| a.to_string());
+        assert_eq!(ip("127.0.0.1").as_deref(), Some("127.0.0.1"));
+        assert_eq!(ip("127.1").as_deref(), Some("127.0.0.1"));
+        assert_eq!(ip("10.1.2").as_deref(), Some("10.1.0.2"));
+        assert_eq!(ip("3232235521").as_deref(), Some("192.168.0.1"));
+        assert_eq!(ip("0xc0.0250.1").as_deref(), Some("192.168.0.1"));
+        assert_eq!(ip("1.2.3.4.5"), None);
+        assert_eq!(ip("256.1.1.1"), None);
+        assert_eq!(ip("1.2.3.256"), None);
+        assert_eq!(ip("08.1.1.1"), None);
+        assert_eq!(ip("x.test"), None);
+        assert_eq!(ip(""), None);
     }
 
     #[test]

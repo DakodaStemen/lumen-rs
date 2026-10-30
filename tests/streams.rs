@@ -242,6 +242,7 @@ fn ytdlp_resolves_separate_video_and_audio_streams() {
 
     let args = std::fs::read_to_string(&log).unwrap();
     for expected in [
+        "--ignore-config",
         "--no-playlist",
         "-f",
         "b/bv*+ba",

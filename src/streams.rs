@@ -346,6 +346,11 @@ fn forward_lines(reader: impl Read + Send + 'static, tx: Sender<String>) {
     });
 }
 
+/// A port that was free a moment ago. Another local process could take it between this call
+/// and Streamlink binding it; the relay then fails to start, or (worse) a different server
+/// answers on it. `relay` only reports the stream ready once Streamlink itself prints this
+/// exact address, which limits the window to a process that binds the port after Streamlink
+/// announced it, an accepted risk for a loopback-only listener.
 fn free_port() -> io::Result<u16> {
     Ok(TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
 }
@@ -409,7 +414,9 @@ impl Pipeline {
     /// Runs as part of the job, so replacing the job stops it.
     fn can_handle(&self, streamlink: &PathBuf) -> bool {
         let mut command = Command::new(streamlink);
-        command.args(["--can-handle-url-no-redirect", &self.page]);
+        // The `=` form binds the page to the option, so a page can never be read as a flag.
+        // (This option takes its value directly, so `--` cannot be used as with the others.)
+        command.arg(format!("--can-handle-url-no-redirect={}", self.page));
         let Ok(Proc {
             child,
             stdout,
@@ -517,6 +524,9 @@ impl Pipeline {
         self.emit(Event::Stage(Activity::Ytdlp));
         let mut command = Command::new(ytdlp);
         command.args([
+            // Only the options given here: a user or system yt-dlp config could add
+            // `--exec`, output templates or a proxy.
+            "--ignore-config",
             "--no-warnings",
             "--no-playlist",
             "-f",
