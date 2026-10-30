@@ -24,20 +24,36 @@ fn home() -> Option<PathBuf> {
 ///
 /// Linux: `$XDG_CONFIG_HOME` or `~/.config`. macOS: `~/Library/Application Support`.
 /// Windows: `%APPDATA%`.
-pub fn config_dir() -> PathBuf {
+///
+/// Fails when none of those is set to an absolute path, rather than keeping settings in
+/// whatever folder Lumen happened to be started from.
+pub fn config_dir() -> anyhow::Result<PathBuf> {
     config_base(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("APPDATA"),
         home(),
     )
-    .join("lumen-rs")
+    .map(|base| base.join("lumen-rs"))
+    .ok_or_else(|| {
+        let vars = if cfg!(windows) {
+            "APPDATA or USERPROFILE"
+        } else {
+            "HOME"
+        };
+        anyhow::anyhow!("cannot find a folder for settings: set {vars} to an absolute path")
+    })
 }
 
-fn config_base(xdg: Option<OsString>, appdata: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
-    let fallback = || PathBuf::from(".");
+fn config_base(
+    xdg: Option<OsString>,
+    appdata: Option<OsString>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let home = home.filter(|h| h.is_absolute());
     if cfg!(windows) {
         appdata
             .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
             .or_else(|| home.map(|h| h.join("AppData").join("Roaming")))
     } else if cfg!(target_os = "macos") {
         home.map(|h| h.join("Library").join("Application Support"))
@@ -46,7 +62,6 @@ fn config_base(xdg: Option<OsString>, appdata: Option<OsString>, home: Option<Pa
             .filter(|p| p.is_absolute())
             .or_else(|| home.map(|h| h.join(".config")))
     }
-    .unwrap_or_else(fallback)
 }
 
 /// Where screenshots go: `~/Pictures/Lumen` on every platform.
@@ -75,7 +90,10 @@ fn which_in(name: &str, path: &OsString, pathext: Option<OsString>) -> Option<Pa
                 .map(|e| format!("{name}{e}")),
         );
     }
+    // A relative entry (`.`, `bin`, or the empty one an extra `:` makes) would resolve against
+    // the current folder, so a program planted there could be run instead of the real tool.
     std::env::split_paths(path)
+        .filter(|dir| dir.is_absolute())
         .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
         .find(|p| is_executable(p))
 }
@@ -113,17 +131,53 @@ mod tests {
         let home = Some(PathBuf::from("/h"));
         let base = config_base(Some("/x".into()), Some("/a".into()), home.clone());
         if cfg!(windows) {
-            assert_eq!(base, PathBuf::from("/a"));
+            assert_eq!(base, Some(PathBuf::from("/a")));
         } else if cfg!(target_os = "macos") {
-            assert_eq!(base, PathBuf::from("/h/Library/Application Support"));
+            assert_eq!(base, Some(PathBuf::from("/h/Library/Application Support")));
         } else {
-            assert_eq!(base, PathBuf::from("/x"));
+            assert_eq!(base, Some(PathBuf::from("/x")));
             assert_eq!(
                 config_base(Some("rel".into()), None, home),
-                PathBuf::from("/h/.config")
+                Some(PathBuf::from("/h/.config"))
             );
         }
-        assert_eq!(config_base(None, None, None), PathBuf::from("."));
+    }
+
+    #[test]
+    fn config_dir_fails_closed_without_a_home() {
+        assert_eq!(config_base(None, None, None), None);
+        assert_eq!(
+            config_base(Some("rel".into()), Some("rel".into()), Some("rel".into())),
+            None,
+            "relative values would land in the current folder"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn which_skips_relative_path_entries() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tool");
+        std::fs::write(&file, "").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // `tool` sits in a folder reachable by a relative PATH entry from the current folder.
+        let cwd = std::env::current_dir().unwrap();
+        let relative = pathdiff(dir.path(), &cwd);
+        let path = std::env::join_paths([relative.as_path(), Path::new("")]).unwrap();
+        assert!(relative.is_relative());
+        assert_eq!(which_in("tool", &path, None), None);
+        let absolute = std::env::join_paths([dir.path()]).unwrap();
+        assert_eq!(which_in("tool", &absolute, None), Some(file));
+    }
+
+    /// `target` relative to `base`, both absolute.
+    fn pathdiff(target: &Path, base: &Path) -> PathBuf {
+        let (t, b): (Vec<_>, Vec<_>) = (target.components().collect(), base.components().collect());
+        let common = t.iter().zip(&b).take_while(|(x, y)| x == y).count();
+        let mut out: PathBuf = b[common..].iter().map(|_| "..").collect();
+        out.extend(&t[common..]);
+        out
     }
 
     #[test]

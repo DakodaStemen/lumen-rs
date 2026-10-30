@@ -102,7 +102,7 @@ impl Store {
         }
     }
 
-    pub fn default_dir() -> PathBuf {
+    pub fn default_dir() -> anyhow::Result<PathBuf> {
         crate::platform::config_dir()
     }
 
