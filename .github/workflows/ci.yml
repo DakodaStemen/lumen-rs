@@ -72,5 +72,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
         with:
-          tool: cargo-audit
+          tool: cargo-audit, cargo-deny
       - run: cargo audit
+      - run: cargo deny check
+
+  newer-libmpv:
+    name: playback (Arch, libmpv >= 0.41)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    # Temporary: a_loaded_subtitle_file_comes_back_with_the_video fails on mpv
+    # 0.41 (subtitle restoration backend bug). Remove after the backend fix lands.
+    continue-on-error: true
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - name: Install build and playback dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          base-devel git rust mpv ffmpeg streamlink
+          libx11 libxkbcommon wayland mesa xorg-server-xvfb xorg-xauth
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require newer mpv
+        run: |
+          mpv --version
+          ver=$(pkg-config --modversion mpv)
+          echo "libmpv API version: $ver"
+          pkg=$(pacman -Q mpv | cut -d ' ' -f 2)
+          test "$(vercmp "${pkg#*:}" 0.41.0)" -ge 0
+      - name: Build and test against system libmpv
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" cargo test --locked
