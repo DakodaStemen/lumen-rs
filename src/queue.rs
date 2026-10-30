@@ -56,7 +56,9 @@ fn playlist_entry(line: &str, base: &Path) -> Option<String> {
         return None;
     }
     let path = Path::new(&value);
-    let resolved = if path.is_absolute() {
+    // A `file:///x` path is rooted even where it is not absolute (Windows, no drive): keep it
+    // as mpv would open it rather than moving it under the playlist's folder.
+    let resolved = if path.is_absolute() || (is_file_url && path.has_root()) {
         value
     } else {
         base.join(path).to_string_lossy().into_owned()

@@ -128,10 +128,22 @@ mod tests {
 
     #[test]
     fn config_dir_follows_the_platform() {
-        let home = Some(PathBuf::from("/h"));
-        let base = config_base(Some("/x".into()), Some("/a".into()), home.clone());
+        // Absolute on the platform under test: `/x` has no drive on Windows.
+        let abs = |p: &str| {
+            if cfg!(windows) {
+                PathBuf::from(format!("C:{p}"))
+            } else {
+                PathBuf::from(p)
+            }
+        };
+        let home = Some(abs("/h"));
+        let base = config_base(Some(abs("/x").into()), Some(abs("/a").into()), home.clone());
         if cfg!(windows) {
-            assert_eq!(base, Some(PathBuf::from("/a")));
+            assert_eq!(base, Some(abs("/a")));
+            assert_eq!(
+                config_base(None, Some("rel".into()), home),
+                Some(abs("/h").join("AppData").join("Roaming"))
+            );
         } else if cfg!(target_os = "macos") {
             assert_eq!(base, Some(PathBuf::from("/h/Library/Application Support")));
         } else {
@@ -161,6 +173,15 @@ mod tests {
         let file = dir.path().join("tool");
         std::fs::write(&file, "").unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        /// `target` relative to `base`, both absolute.
+        fn pathdiff(target: &Path, base: &Path) -> PathBuf {
+            let (t, b): (Vec<_>, Vec<_>) =
+                (target.components().collect(), base.components().collect());
+            let common = t.iter().zip(&b).take_while(|(x, y)| x == y).count();
+            let mut out: PathBuf = b[common..].iter().map(|_| "..").collect();
+            out.extend(&t[common..]);
+            out
+        }
         // `tool` sits in a folder reachable by a relative PATH entry from the current folder.
         let cwd = std::env::current_dir().unwrap();
         let relative = pathdiff(dir.path(), &cwd);
@@ -169,15 +190,6 @@ mod tests {
         assert_eq!(which_in("tool", &path, None), None);
         let absolute = std::env::join_paths([dir.path()]).unwrap();
         assert_eq!(which_in("tool", &absolute, None), Some(file));
-    }
-
-    /// `target` relative to `base`, both absolute.
-    fn pathdiff(target: &Path, base: &Path) -> PathBuf {
-        let (t, b): (Vec<_>, Vec<_>) = (target.components().collect(), base.components().collect());
-        let common = t.iter().zip(&b).take_while(|(x, y)| x == y).count();
-        let mut out: PathBuf = b[common..].iter().map(|_| "..").collect();
-        out.extend(&t[common..]);
-        out
     }
 
     #[test]
