@@ -118,7 +118,7 @@ fn the_network_dialog_rejects_bad_links_and_opens_good_ones() {
     let mut h = harness(quiet_session());
     first(&h, "Open link…").click();
     settle(&mut h);
-    h.get_by_label("Open network stream");
+    h.get_by_label("Open link");
 
     // The field starts with https://, and a whole link typed after it replaces it.
     let field = h
@@ -209,11 +209,11 @@ fn escape_closes_the_network_dialog() {
     let mut h = harness(quiet_session());
     h.key_press_modifiers(Modifiers::CTRL, Key::L);
     settle(&mut h);
-    h.get_by_label("Open network stream");
+    h.get_by_label("Open link");
     h.key_press(Key::Escape);
     settle(&mut h);
     assert!(h.state_mut().front().url.is_none());
-    assert!(h.query_by_label("Open network stream").is_none());
+    assert!(h.query_by_label("Open link").is_none());
 }
 
 #[test]
@@ -252,8 +252,14 @@ fn the_queue_filter_narrows_the_list() {
 
 #[test]
 fn shuffle_and_repeat_buttons_toggle_the_queue_modes() {
-    let Some(_fx) = fixture() else { return };
+    let Some(fx) = fixture() else { return };
     let mut h = harness(quiet_session());
+    // The playback controls appear once something is queued.
+    h.state_mut()
+        .front()
+        .session
+        .add(&[fx.path("show/ep1.mp4")], false);
+    settle(&mut h);
     assert!(!h.state_mut().front().session.queue.shuffle);
     h.get_by_label("Shuffle").click();
     h.get_by_label("Repeat").click();
@@ -499,6 +505,9 @@ fn the_more_menu_opens_preferences_and_media_information() {
     pass_time(&mut h, 400);
     h.get_by_label("Resolution");
     h.get_by_label("320 × 180");
+    // The dialog is modal; Escape closes it before the menu can be used again.
+    h.key_press(Key::Escape);
+    settle(&mut h);
 
     h.get_by_label("Main menu").click();
     settle(&mut h);
@@ -527,7 +536,7 @@ fn the_audio_menu_switches_tracks() {
 
     h.get_by_label("Audio & subtitles").click();
     settle(&mut h);
-    h.get_by_label("Audio track ⏵").click();
+    h.get_by_label("Audio track").click();
     settle(&mut h);
     h.get_by_label("jpn").click();
     settle(&mut h);
@@ -554,7 +563,7 @@ fn the_video_menu_lists_chapters_and_jumps() {
 
     h.get_by_label("Video").click();
     settle(&mut h);
-    h.get_by_label("Chapters ⏵").click();
+    h.get_by_label("Chapters").click();
     settle(&mut h);
     h.get_by_label("Intro   0:00");
     h.get_by_label("Main   0:10").click();
