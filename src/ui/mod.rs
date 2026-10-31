@@ -504,6 +504,9 @@ impl Frontend {
             Action::Remove => {
                 if let Some(index) = self.selected.take() {
                     self.session.remove(index);
+                    // The selection moves on to the row that took its place, as in GTK lists.
+                    let left = self.session.queue.items.len();
+                    self.selected = (left > 0).then(|| index.min(left - 1));
                 }
             }
         }
@@ -775,11 +778,21 @@ impl Frontend {
                             .max_rect(text_rect)
                             .layout(Layout::left_to_right(Align::Center)),
                     );
+                    // The row's own tooltip names the file, so the label adds none of its own.
                     text_ui.add(
                         egui::Label::new(RichText::new(&item.title).color(p.text))
                             .truncate()
+                            .show_tooltip_when_elided(false)
                             .selectable(false),
                     );
+                    if row.has_focus() {
+                        ui.painter().rect_stroke(
+                            rect.shrink(1.0),
+                            CornerRadius::same(theme::RADIUS),
+                            Stroke::new(2.0_f32, p.accent.gamma_multiply(0.6)),
+                            StrokeKind::Inside,
+                        );
+                    }
                     row.widget_info(|| {
                         egui::WidgetInfo::labeled(
                             egui::WidgetType::Button,
@@ -790,7 +803,9 @@ impl Frontend {
                     if row.clicked() {
                         self.selected = Some(index);
                     }
-                    if row.double_clicked() {
+                    if row.double_clicked()
+                        || (row.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    {
                         play = Some(index);
                     }
                     row.on_hover_text(&item.source).context_menu(|ui| {
