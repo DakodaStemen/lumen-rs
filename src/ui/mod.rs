@@ -60,6 +60,7 @@ pub struct UrlDialog {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefsTab {
     Playback,
+    Picture,
     Streams,
     Keys,
 }

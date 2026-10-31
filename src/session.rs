@@ -74,6 +74,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(engine: Engine, store: Store) -> Self {
+        engine.apply_settings(&store.settings, &crate::tuning::shader_dir());
         Self {
             engine,
             store,
@@ -92,6 +93,17 @@ impl Session {
             last_save: Instant::now(),
             flash: None,
         }
+    }
+
+    /// Pushes the current settings to mpv (after a change in Preferences or a menu) and saves them.
+    pub fn apply_settings(&mut self) {
+        let refused = self
+            .engine
+            .apply_settings(&self.store.settings, &crate::tuning::shader_dir());
+        if !refused.is_empty() {
+            self.flash(&format!("mpv rejected: {}", refused.join(", ")));
+        }
+        self.store.save_settings();
     }
 
     // ----- queue -----

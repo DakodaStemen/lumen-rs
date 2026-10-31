@@ -98,7 +98,11 @@ impl Engine {
         LOCALE.call_once(crate::platform::set_c_numeric_locale);
         let mpv = Mpv::with_initializer(|init| {
             match output {
-                Output::Window => init.set_property("vo", "libmpv")?,
+                Output::Window => {
+                    init.set_property("vo", "libmpv")?;
+                    // Quality defaults. Older mpv builds may lack the profile; carry on without it.
+                    let _ = init.set_property("profile", "gpu-hq");
+                }
                 Output::Headless => {
                     init.set_property("vo", "null")?;
                     init.set_property("ao", "null")?;
@@ -313,6 +317,79 @@ impl Engine {
         let _ = self.mpv.set_property(name, ms as f64 / 1000.0);
     }
 
+    // ----- settings, picture and audio output -----
+
+    /// Applies every mpv option Lumen's settings control (decoding, tone mapping, subtitle
+    /// style, colour, audio filters and output, shaders). Returns the options mpv refused.
+    pub fn apply_settings(
+        &self,
+        settings: &crate::store::Settings,
+        shader_dir: &std::path::Path,
+    ) -> Vec<String> {
+        crate::tuning::mpv_options(settings, shader_dir)
+            .into_iter()
+            .filter(|(name, value)| self.mpv.set_property(name, value.as_str()).is_err())
+            .map(|(name, _)| name.to_owned())
+            .collect()
+    }
+
+    /// The current value of an mpv property as text, for display and tests.
+    pub fn property(&self, name: &str) -> Option<String> {
+        self.text(name)
+    }
+
+    /// Audio output devices as `(mpv device name, description)`, `auto` first.
+    pub fn audio_devices(&self) -> Vec<(String, String)> {
+        self.text("audio-device-list")
+            .map(|json| parse_audio_devices(&json))
+            .unwrap_or_default()
+    }
+
+    pub fn set_aspect(&self, aspect: &str) {
+        self.set("video-aspect-override", aspect);
+    }
+
+    pub fn aspect(&self) -> String {
+        self.text("video-aspect-override")
+            .unwrap_or_else(|| "-1".to_owned())
+    }
+
+    /// Rotation in degrees: 0, 90, 180 or 270.
+    pub fn rotation(&self) -> i64 {
+        self.integer("video-rotate").unwrap_or(0)
+    }
+
+    pub fn set_rotation(&self, degrees: i64) {
+        let _ = self
+            .mpv
+            .set_property("video-rotate", degrees.rem_euclid(360));
+    }
+
+    /// Crops to a centred area with this ratio, or removes the crop. Needs mpv 0.41 or newer;
+    /// returns false when there is no picture or mpv refuses.
+    pub fn set_crop(&self, ratio: Option<(u32, u32)>) -> bool {
+        let value = match ratio {
+            None => String::new(),
+            Some(ratio) => {
+                let (Some(w), Some(h)) = (
+                    self.integer("video-params/w"),
+                    self.integer("video-params/h"),
+                ) else {
+                    return false;
+                };
+                match crate::tuning::crop_geometry(w, h, ratio) {
+                    Some(value) => value,
+                    None => return false,
+                }
+            }
+        };
+        self.mpv.set_property("video-crop", value.as_str()).is_ok()
+    }
+
+    pub fn crop(&self) -> String {
+        self.text("video-crop").unwrap_or_default()
+    }
+
     // ----- tracks -----
 
     pub fn tracks(&self, kind: TrackKind) -> Vec<Track> {
@@ -462,9 +539,37 @@ impl Engine {
     }
 }
 
+/// Parses mpv's `audio-device-list` (a JSON array of `{name, description}`).
+fn parse_audio_devices(json: &str) -> Vec<(String, String)> {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str(json) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = item.get("name")?.as_str()?.to_owned();
+            let description = item
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or(&name)
+                .to_owned();
+            Some((name, description))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Engine, LOCKDOWN, Output, has_loadfile_index};
+    use super::{Engine, LOCKDOWN, Output, has_loadfile_index, parse_audio_devices};
+
+    #[test]
+    fn parses_the_audio_device_list() {
+        let json = r#"[{"name":"auto","description":"Autoselect device"},{"name":"pipewire","description":"PipeWire"},{"name":"x"}]"#;
+        let devices = parse_audio_devices(json);
+        assert_eq!(devices[0], ("auto".into(), "Autoselect device".into()));
+        assert_eq!(devices[2], ("x".into(), "x".into()));
+        assert!(parse_audio_devices("nonsense").is_empty());
+    }
 
     #[test]
     fn mpv_starts_locked_down() {

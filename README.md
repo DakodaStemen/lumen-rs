@@ -1,7 +1,12 @@
-<h1 align="center">Lumen · Rust</h1>
-<p align="center"><strong>Every format. Every frame. In a better light.</strong><br>A native media player, built in Rust on libmpv.</p>
+```text
+ _
+| |   _   _ _ __ ___   ___ _ __
+| |  | | | | '_ ` _ \ / _ \ '_ \
+| |__| |_| | | | | | |  __/ | | |
+|_____\__,_|_| |_| |_|\___|_| |_|   · Rust
+```
 
-<p align="center"><img src="docs/demo.gif" width="100%" alt="A tour of Lumen Rust: dropping files, seeking with a hover preview, subtitles, chapters, speed, an A-B loop, the queue and key rebinding"></p>
+**Every format. Every frame. In a better light.**
 
 **A native media player for Linux, Windows and macOS.**
 Lumen uses egui/eframe for the interface and libmpv for playback, so video is drawn
@@ -10,6 +15,48 @@ Python or libVLC runtime.
 
 This is an early release: playback and streams are covered, and the remaining features
 are listed in [docs/migration.md](docs/migration.md). No performance claims are made.
+
+## Status
+
+| Area | State | Evidence |
+| --- | --- | --- |
+| Playback, queue, resume, streams | Working | Headless playback and stream tests |
+| Quality defaults, hardware decoding, tone mapping | Working | Options reach headless mpv in tests; looks and speed not measured |
+| Subtitle style, picture controls, night mode, ReplayGain, audio device | Working | Settings reach headless mpv in tests; not judged by eye or ear |
+| Shader presets | Working, none bundled | Lists files you put in `~/.config/lumen-rs/shaders` |
+| Media keys and MPRIS | New | Mapping logic tested; not yet run against a real desktop |
+| Packaging | Draft | `.desktop` and AppStream validated; Flatpak manifest never built |
+| Equalizer, online subtitles, preview frames | Not started | See [docs/migration.md](docs/migration.md) |
+
+## How it fits together
+
+```mermaid
+flowchart LR
+  UI["egui interface<br/>ui/, app.rs"] --> S["Session<br/>queue, resume, policy"]
+  S --> E["Engine<br/>libmpv wrapper"]
+  S --> T["Tuning<br/>settings to mpv options"]
+  T --> E
+  E --> V["Video<br/>GL texture"]
+  V --> UI
+  S --> ST["Streams<br/>Streamlink, yt-dlp"]
+  UI <--> M["Media keys<br/>worker thread, MPRIS"]
+```
+
+## Feature matrix
+
+| Feature | Lumen | Notes |
+| --- | --- | --- |
+| Local files and network URLs | Yes | Through libmpv |
+| Hardware decoding | Yes | Picker: automatic, VA-API, NVDEC, off |
+| HDR video | Tone-mapped to SDR | Video renders into an 8-bit RGBA framebuffer; there is no HDR output |
+| User shaders | Yes | From `~/.config/lumen-rs/shaders`; none included |
+| Subtitle styling | Font, size, colours, outline, position | Applies to text subtitles |
+| Picture controls | Brightness, contrast, saturation, gamma, hue; aspect, rotate, crop | Crop needs mpv 0.41 or newer |
+| Audio | Night mode, ReplayGain, output device | Night mode is a loudnorm filter |
+| Twitch, Kick, YouTube | Yes | Needs Streamlink or yt-dlp installed |
+| Media keys / MPRIS | Yes | Play, pause, stop, next, previous; seek and volume from the desktop are not wired |
+| Equalizer, online subtitle search | No | Pending |
+| Packages | No | Draft Flatpak and `.desktop` files in `packaging/` |
 
 ## Working today
 
@@ -41,12 +88,20 @@ are listed in [docs/migration.md](docs/migration.md). No performance claims are 
 - [SponsorBlock](https://sponsor.ajay.app): sponsor reads, self-promotion and subscribe
   reminders in YouTube videos are skipped (intros and outros optionally).
 - An "Open network stream" dialog (Ctrl+L) for HTTP, HTTPS, RTSP, RTMP, UDP and RTP links.
+- Quality defaults (`profile=gpu-hq`), a hardware-decoding picker and a tone-mapping choice, under
+  **Preferences → Picture & sound**, together with subtitle style, picture controls, night mode,
+  ReplayGain and the audio output device.
+- Aspect, rotate and crop in the Video menu, and a Shaders menu for your own files in
+  `~/.config/lumen-rs/shaders` (Lumen ships none).
+- Media keys and MPRIS on a worker thread, so the desktop's play, pause, stop, next and previous work.
 - Its own profile in `~/.config/lumen-rs`.
 
 ## Not yet
 
-Online subtitle search, the equalizer and picture controls, seek-bar preview frames, media
-keys and MPRIS, and packaging. `docs/migration.md` tracks each item.
+Online subtitle search, the equalizer, seek-bar preview frames, zoom, flip and deinterlace,
+installable packages (a draft Flatpak manifest and `.desktop` files are in `packaging/`), and HDR
+output: HDR is shown tone-mapped to SDR because the video framebuffer is 8-bit RGBA.
+`docs/migration.md` tracks each item.
 
 ## Build and run
 
@@ -121,14 +176,6 @@ contributors (CC BY-NC-SA 4.0).
 
 Settings in `settings.json`: `stream_quality` (`"best"`, or a name such as `"720p60"`),
 `low_latency` (Twitch and Kick), `sponsorblock`, and `sponsorblock_intros`.
-
-## The demo
-
-`docs/demo.gif` is recorded from the real player, not mocked up. `scripts/record-demo.sh` makes
-a few silent clips (generated pictures with no audio stream), plays a scripted tour in a real
-window with injected mouse and key input, and encodes the frames (with gifski when it is installed, else ffmpeg). It needs ffmpeg and a desktop
-session, and the player runs muted. On a virtual display with software GL, set `DEMO_GRAB=1` so the
-screen itself is recorded. Rerun it after changing the interface.
 
 ## Project layout
 

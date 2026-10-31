@@ -5,6 +5,7 @@ use eframe::egui::{self, Align2, Color32, RichText, Vec2};
 use super::{Frontend, PrefsTab, UrlDialog, geometry, theme};
 use crate::keys::{self, Action, binding_text};
 use crate::streams::is_network_url;
+use crate::tuning;
 
 /// Warnings and failures; the theme has no dedicated error colour.
 const ERROR: Color32 = Color32::from_rgb(0xf0, 0x8a, 0x80);
@@ -109,12 +110,14 @@ impl Frontend {
         let mut open = true;
         let mut keys_changed = false;
         let mut settings_changed = false;
+        let mut tuning_changed = false;
         window("Preferences").open(&mut open).show(ctx, |ui| {
             ui.set_min_width(500.0);
             ui.spacing_mut().item_spacing.y = GAP;
             ui.horizontal(|ui| {
                 for (tab, label) in [
                     (PrefsTab::Playback, "Playback"),
+                    (PrefsTab::Picture, "Picture & sound"),
                     (PrefsTab::Streams, "Streams"),
                     (PrefsTab::Keys, "Keyboard"),
                 ] {
@@ -152,6 +155,118 @@ impl Frontend {
                             "Continue with the next file in the folder",
                         )
                         .changed();
+                }
+                PrefsTab::Picture => {
+                    section(ui, "Decoding and HDR");
+                    ui.horizontal(|ui| {
+                        ui.label("Hardware decoding");
+                        let shown = tuning::HWDEC
+                            .iter()
+                            .find(|(v, _)| *v == s.hwdec)
+                            .map_or("Automatic (safe)", |(_, l)| *l);
+                        egui::ComboBox::from_id_salt("hwdec")
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                for (value, label) in tuning::HWDEC {
+                                    tuning_changed |= ui
+                                        .selectable_value(&mut s.hwdec, value.to_owned(), label)
+                                        .changed();
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("HDR tone mapping");
+                        egui::ComboBox::from_id_salt("tone")
+                            .selected_text(s.tone_mapping.clone())
+                            .show_ui(ui, |ui| {
+                                for value in tuning::TONE_MAPPING {
+                                    tuning_changed |= ui
+                                        .selectable_value(&mut s.tone_mapping, value.to_owned(), value)
+                                        .changed();
+                                }
+                            });
+                    });
+                    ui.label(theme::muted(
+                        "Video is drawn into an 8-bit RGBA texture, so HDR is shown tone-mapped to SDR.",
+                    ));
+                    section(ui, "Subtitles");
+                    ui.horizontal(|ui| {
+                        ui.label("Font");
+                        tuning_changed |= ui
+                            .add(egui::TextEdit::singleline(&mut s.subtitles.font).desired_width(160.0).hint_text("mpv default"))
+                            .changed();
+                        ui.label("Size");
+                        tuning_changed |= ui
+                            .add(egui::DragValue::new(&mut s.subtitles.size).range(8..=200))
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        for (label, value) in [("Text", &mut s.subtitles.color), ("Outline", &mut s.subtitles.border_color)] {
+                            ui.label(label);
+                            let mut rgb = tuning::color_rgb(value).unwrap_or([255, 255, 255]);
+                            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                *value = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                                tuning_changed = true;
+                            }
+                        }
+                        ui.label("Outline width");
+                        tuning_changed |= ui
+                            .add(egui::DragValue::new(&mut s.subtitles.border).range(0.0..=10.0).speed(0.1))
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Position (0 top, 100 bottom)");
+                        tuning_changed |= ui
+                            .add(egui::Slider::new(&mut s.subtitles.pos, 0..=100))
+                            .changed();
+                    });
+                    section(ui, "Picture");
+                    for (label, value) in [
+                        ("Brightness", &mut s.picture.brightness),
+                        ("Contrast", &mut s.picture.contrast),
+                        ("Saturation", &mut s.picture.saturation),
+                        ("Gamma", &mut s.picture.gamma),
+                        ("Hue", &mut s.picture.hue),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{label:<10}"));
+                            tuning_changed |= ui.add(egui::Slider::new(value, -100..=100)).changed();
+                        });
+                    }
+                    if ui.button("Reset picture").clicked() {
+                        s.picture = Default::default();
+                        tuning_changed = true;
+                    }
+                    section(ui, "Audio");
+                    tuning_changed |= ui
+                        .checkbox(&mut s.audio.night_mode, "Night mode (loudness normalisation, narrow range)")
+                        .changed();
+                    ui.horizontal(|ui| {
+                        ui.label("ReplayGain");
+                        for (value, label) in tuning::REPLAYGAIN {
+                            tuning_changed |= ui
+                                .selectable_value(&mut s.audio.replaygain, value.to_owned(), label)
+                                .changed();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Output device");
+                        let devices = self.session.engine.audio_devices();
+                        let shown = devices
+                            .iter()
+                            .find(|(n, _)| *n == s.audio.device)
+                            .map_or(s.audio.device.clone(), |(_, d)| d.clone());
+                        egui::ComboBox::from_id_salt("audio-device")
+                            .selected_text(shown)
+                            .width(260.0)
+                            .show_ui(ui, |ui| {
+                                for (name, description) in &devices {
+                                    tuning_changed |= ui
+                                        .selectable_value(&mut s.audio.device, name.clone(), description)
+                                        .changed();
+                                }
+                            });
+                    });
                 }
                 PrefsTab::Streams => {
                     section(ui, "Quality");
@@ -290,6 +405,9 @@ impl Frontend {
         });
         if keys_changed {
             self.rebuild_keymap();
+        }
+        if tuning_changed {
+            self.session.apply_settings();
         }
         if keys_changed || settings_changed {
             self.session.store.save_settings();
