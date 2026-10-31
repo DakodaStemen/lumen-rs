@@ -351,10 +351,14 @@ impl Frontend {
             self.capture_key(ctx);
             return;
         }
-        // Escape closes the top-most dialog before it can act as a shortcut.
-        // Escape closes an open menu first (egui does that), then the top-most dialog.
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape))
-            && !egui::Popup::is_any_open(ctx)
+        // Escape closes an open menu first, submenus and all, then the top-most dialog, before
+        // it can act as a shortcut.
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if escape && egui::Popup::is_any_open(ctx) {
+            egui::Popup::close_all(ctx);
+            return;
+        }
+        if escape
             && (self.url.take().is_some()
                 || self.prefs.take().is_some()
                 || std::mem::take(&mut self.info)

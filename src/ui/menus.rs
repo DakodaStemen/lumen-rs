@@ -108,7 +108,8 @@ fn submenu<R>(ui: &mut Ui, label: &str, gutter: bool, content: impl FnOnce(&mut 
     let response = egui::containers::menu::SubMenuButton::from_button(button)
         .ui(ui, |ui| {
             begin(ui, 200.0, gutter);
-            content(ui)
+            let max = ui.ctx().content_rect().height() - 12.0 - 16.0;
+            theme::scroll_menu(ui, max, content)
         })
         .0;
     geometry::note(ui.ctx(), label, response.rect);
@@ -208,11 +209,17 @@ impl Frontend {
                 } else {
                     chapter.title.clone()
                 };
-                if choice(
-                    ui,
-                    &format!("{name}   {}", clock(chapter.time_ms)),
-                    now == Some(index),
-                ) {
+                // The start time sits on the right like a shortcut, so a long title is cut
+                // short rather than the time.
+                let response = ui
+                    .add(
+                        row(ui, shorten(&name), now == Some(index))
+                            .shortcut_text(clock(chapter.time_ms)),
+                    )
+                    .on_hover_text(&name);
+                geometry::note(ui.ctx(), &name, response.rect);
+                if response.clicked() {
+                    ui.close();
                     self.session.go_to_chapter(index);
                 }
             }

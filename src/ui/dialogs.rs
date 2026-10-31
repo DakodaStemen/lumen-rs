@@ -25,6 +25,7 @@ fn dialog(
     let p = theme::palette(ctx);
     let mut open = true;
     let width = width.min(ctx.content_rect().width() - 24.0).max(200.0);
+    let body_height = (ctx.content_rect().height() - 2.0 * GAP - 46.0).max(60.0);
     egui::Modal::new(egui::Id::new(("lumen-dialog", title)))
         .backdrop_color(Color32::from_black_alpha(if p.dark() { 110 } else { 70 }))
         .frame(
@@ -64,16 +65,24 @@ fn dialog(
             if close_button(&mut close_ui).clicked() {
                 open = false;
             }
-            egui::Frame::new()
-                .inner_margin(egui::Margin {
-                    left: 24,
-                    right: 24,
-                    top: 6,
-                    bottom: 24,
-                })
+            // In a short window the body scrolls, so the header and its close button stay
+            // in view with a little of the window showing above and below.
+            egui::ScrollArea::vertical()
+                .id_salt("dialog-body")
+                .max_height(body_height)
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    ui.set_width(width - 48.0);
-                    content(ui)
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: 24,
+                            right: 24,
+                            top: 6,
+                            bottom: 24,
+                        })
+                        .show(ui, |ui| {
+                            ui.set_width(width - 48.0);
+                            content(ui)
+                        });
                 });
         });
     open
@@ -236,7 +245,7 @@ impl Frontend {
             self.session.streams.tools.ytdlp.is_some(),
         );
         let version = self.session.engine.version();
-        let max_height = (ctx.content_rect().height() - 220.0).clamp(160.0, 460.0);
+        let max_height = (ctx.content_rect().height() - 190.0).clamp(80.0, 460.0);
         let open = dialog(ctx, "Preferences", 600.0, |ui| {
             ui.spacing_mut().item_spacing.y = GAP;
             view_switcher(ui, &mut state.tab);

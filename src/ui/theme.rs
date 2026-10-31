@@ -493,10 +493,26 @@ pub fn menu_separator(ui: &mut Ui) {
 
 /// Opens `content` as a popover menu under `response` when it is clicked.
 fn popover<R>(response: &Response, width: f32, content: impl FnOnce(&mut Ui) -> R) {
+    let screen = response.ctx.content_rect();
+    // Room below the button, less the popover's own margins and a gap to the window edge.
+    let below = screen.bottom() - response.rect.bottom() - 4.0 - 12.0 - 8.0;
     egui::Popup::menu(response).gap(4.0).show(|ui| {
         menu_rows(ui, width);
-        content(ui)
+        scroll_menu(ui, below, content)
     });
+}
+
+/// Lets a menu taller than `max_height` scroll instead of running off the window.
+pub fn scroll_menu<R>(ui: &mut Ui, max_height: f32, content: impl FnOnce(&mut Ui) -> R) -> R {
+    // A bar that takes its own room, so it never covers the shortcuts on the right.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+    // Long labels are already cut short; a row never breaks onto a second line.
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    egui::ScrollArea::vertical()
+        .max_height(max_height.max(64.0))
+        .auto_shrink([true, true])
+        .show(ui, content)
+        .inner
 }
 
 /// Whether the popover belonging to `response` is open.
