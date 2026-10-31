@@ -7,5 +7,6 @@ pub mod session;
 pub mod sponsorblock;
 pub mod store;
 pub mod streams;
+pub mod tuning;
 pub mod ui;
 pub mod video;

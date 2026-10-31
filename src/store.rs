@@ -35,6 +35,77 @@ pub struct Settings {
     /// Key bindings by action id. An empty string unbinds the action.
     pub keys: BTreeMap<String, String>,
     pub recent: Vec<String>,
+    /// Hardware decoding: `auto-safe`, `vaapi`, `nvdec` or `no`.
+    pub hwdec: String,
+    /// HDR to SDR tone-mapping algorithm for mpv's `gpu` renderer; `auto` leaves mpv's default.
+    pub tone_mapping: String,
+    pub subtitles: SubtitleStyle,
+    pub picture: Picture,
+    pub audio: AudioPrefs,
+    /// Shader file names (inside the shaders folder) that are switched on.
+    pub shaders: Vec<String>,
+}
+
+/// How subtitles are drawn. An empty font keeps mpv's default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SubtitleStyle {
+    pub font: String,
+    /// Font size in mpv's scaled pixels (mpv's default is 55).
+    pub size: u32,
+    /// Text colour as `#RRGGBB`.
+    pub color: String,
+    /// Outline colour as `#RRGGBB`.
+    pub border_color: String,
+    /// Outline width (mpv's default is 3).
+    pub border: f32,
+    /// Vertical position, 0 (top) to 100 (bottom).
+    pub pos: u32,
+}
+
+impl Default for SubtitleStyle {
+    fn default() -> Self {
+        Self {
+            font: String::new(),
+            size: 55,
+            color: "#FFFFFF".to_owned(),
+            border_color: "#000000".to_owned(),
+            border: 3.0,
+            pos: 100,
+        }
+    }
+}
+
+/// Colour adjustments, each from -100 to 100 and 0 when untouched.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Picture {
+    pub brightness: i32,
+    pub contrast: i32,
+    pub saturation: i32,
+    pub gamma: i32,
+    pub hue: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioPrefs {
+    /// Night mode: loudness normalisation (EBU R128) with a narrow range.
+    pub night_mode: bool,
+    /// `no`, `track` or `album`.
+    pub replaygain: String,
+    /// An mpv audio device name, or `auto`.
+    pub device: String,
+}
+
+impl Default for AudioPrefs {
+    fn default() -> Self {
+        Self {
+            night_mode: false,
+            replaygain: "no".to_owned(),
+            device: "auto".to_owned(),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -54,6 +125,12 @@ impl Default for Settings {
             last_dir: String::new(),
             keys: BTreeMap::new(),
             recent: Vec::new(),
+            hwdec: "auto-safe".to_owned(),
+            tone_mapping: "auto".to_owned(),
+            subtitles: SubtitleStyle::default(),
+            picture: Picture::default(),
+            audio: AudioPrefs::default(),
+            shaders: Vec::new(),
         }
     }
 }
