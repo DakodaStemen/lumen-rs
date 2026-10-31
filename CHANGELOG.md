@@ -12,6 +12,7 @@
 - Media keys and MPRIS through a worker thread.
 - A `.desktop` file, AppStream metainfo and a draft Flatpak manifest.
 - README rewritten without the demo GIF (removed from the repository).
+- Visual refresh and documentation polish: architecture diagram, documentation nav links and badge formatting.
 
 ## 0.3.0 — A friendlier interface
 

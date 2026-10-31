@@ -3,6 +3,25 @@
 Playback logic is kept apart from the window so it can be tested against real mpv
 without a display.
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#0A0C10','primaryColor':'#11141A','primaryTextColor':'#E9ECF2','primaryBorderColor':'#232833','lineColor':'#7CF0C8','fontFamily':'monospace'}}}%%
+flowchart LR
+  UI["UI<br/>ui/ · app.rs"] --> S["Session<br/>session.rs"] --> E["Engine<br/>engine.rs"] --> M[("libmpv")]
+  S -.-> ST["Streamlink"]
+  S -.-> YT["yt-dlp"]
+  S -.-> SB["SponsorBlock"]
+  ST --> M
+  YT --> M
+  classDef n fill:#11141A,stroke:#232833,color:#E9ECF2
+  classDef a fill:#11141A,stroke:#7CF0C8,color:#7CF0C8
+  classDef b fill:#11141A,stroke:#5B8CFF,color:#5B8CFF
+  class UI,S,E n
+  class M a
+  class ST,YT,SB b
+```
+
+Dotted lines are side paths: subprocesses and a web lookup, never libraries.
+
 | Module | Responsibility |
 | --- | --- |
 | `engine.rs` | A typed wrapper over libmpv: load, seek, tracks, delays, chapters, A-B loop. No player policy. |

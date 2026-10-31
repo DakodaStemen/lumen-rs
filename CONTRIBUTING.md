@@ -19,7 +19,17 @@ Changes to rendering, input or fullscreen also need a run in the real window, on
 Wayland and X11 if you can. Report the checks you ran and their limitations; do not
 claim feature parity or performance improvements from language choice alone.
 
-Keep mpv calls in `engine.rs`, player behaviour in `session.rs`, queue ordering in
-`queue.rs`, persistence in `store.rs`, key bindings in `keys.rs`, GL rendering in
-`video.rs`, and layout in `app.rs`. New behaviour belongs in `Session` with a test in
+## Where code goes
+
+| Concern | File |
+| --- | --- |
+| mpv calls | `src/engine.rs` |
+| Player behaviour | `src/session.rs` |
+| Queue ordering | `src/queue.rs` |
+| Persistence | `src/store.rs` |
+| Key bindings | `src/keys.rs` |
+| GL rendering | `src/video.rs` |
+| Layout | `src/app.rs`, `src/ui/` |
+
+New behaviour belongs in `Session` with a test in
 `tests/playback.rs`, not in the window code.
