@@ -510,9 +510,11 @@ impl Engine {
                 .or(Some("off".to_owned())),
         );
         add("Audio", self.text("audio-codec"));
-        let channels = self
-            .integer("audio-params/channel-count")
-            .map(|c| format!("{c} channels"));
+        let channels = self.integer("audio-params/channel-count").map(|c| match c {
+            1 => "Mono".to_owned(),
+            2 => "Stereo".to_owned(),
+            c => format!("{c} channels"),
+        });
         add("Channels", channels);
         add(
             "Sample rate",
