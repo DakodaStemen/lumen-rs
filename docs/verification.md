@@ -15,13 +15,9 @@ What has been run, and what has not.
   shuffle and repeat, pausing by button and key, file-dialog results, menus (audio tracks,
   chapters, media information), Preferences, rebinding a key and then using it, Escape handling,
   the mini player, the sidebar toggle, double-clicking a queue row, and a range of window sizes.
-- A scripted tour of the real window (`docs/demo.gif`, made by `scripts/record-demo.sh`; silent, as its
-  clips have no audio). The current GIF was re-recorded on an X11 virtual display (Xvfb, Mesa llvmpipe,
-  mpv 0.41) with the screen grabbed by ffmpeg (`DEMO_GRAB=1`); the first one came from a Wayland session. The frames were reviewed: the welcome
-  screen with recent files, the drop hint, queue filling and playback, the seek bar's hover time and
-  chapter name, the Audio & subtitles menu with subtitles appearing, the Video and … menus,
-  chapter jumps, speed, the A-B loop, switching queue items, and Preferences on the keyboard tab.
-  The recording also showed, and fixed, welcome text showing through the drop hint.
+- A scripted tour of the real window can be recorded with `scripts/record-demo.sh` (silent, its clips have
+  no audio). No recording is kept in the repository; the tour was last run before the GIF was removed
+  and has not been rerun for the settings added since.
 - Stream tests: the real Streamlink relays a local HLS stream, restarts at another quality and
   shuts down cleanly; fake yt-dlp and Streamlink programs cover resolution, separate audio,
   failures, fall-backs and results from a replaced lookup. No internet is needed.

@@ -1,53 +1,124 @@
-<div align="center">
-
-<img src="assets/lumen.svg" width="96" alt="Lumen logo">
-
-# Lumen
-
-**Every format. Every frame.**
-
-A native media player for Linux, in one Rust binary on libmpv. egui for the interface,
-video drawn directly on Wayland. No Qt, Python or libVLC runtime.
-
-<img src="docs/demo.gif" width="100%" alt="A tour of Lumen: dropping files, seeking with a hover preview, subtitles, chapters, speed, an A-B loop, the queue and key rebinding">
-
-</div>
-
-> [!IMPORTANT]
-> An early release: playback and streams are covered, and the rest is listed in [docs/migration.md](docs/migration.md). No performance claims are made.
-
 ```text
-╔═╗ FEATURES
+ _
+| |   _   _ _ __ ___   ___ _ __
+| |  | | | | '_ ` _ \ / _ \ '_ \
+| |__| |_| | | | | | |  __/ | | |
+|_____\__,_|_| |_| |_|\___|_| |_|   · Rust
 ```
 
-| | |
-| --- | --- |
-| **Playback** | Local files and URLs via libmpv, hardware decoding when available |
-| **Queue** | Shuffle, repeat, M3U, drag and drop, next-file-in-folder (`ep2` → `ep10`) |
-| **Memory** | Resume, per-file tracks, sync, bookmarks |
-| **Controls** | Frame step, chapters, A-B loop, 0.25×–4× speed, volume to 200% |
-| **Tracks** | Audio and subtitle switching, delay in 50 ms steps |
-| **Interface** | Sidebar queue, seek bar with hover time and chapters, mini player, always on top where allowed |
-| **Streams** | Twitch, Kick and more via Streamlink; YouTube and others via yt-dlp |
-| **SponsorBlock** | Skips sponsors, self-promo and reminders (intros and outros optional) |
-| **Keys** | Every shortcut rebindable, conflicts refused |
-| **Profile** | Own config in `~/.config/lumen-rs` |
+**Every format. Every frame. In a better light.**
 
-**Not yet:** online subtitle search, equalizer and picture controls, seek-bar preview frames, media keys and MPRIS, packaging. [`docs/migration.md`](docs/migration.md) tracks each item.
+**A native media player for Linux, Windows and macOS.**
+Lumen uses egui/eframe for the interface and libmpv for playback, so video is drawn
+natively on Wayland instead of through XWayland. It is a single Rust binary with no Qt,
+Python or libVLC runtime.
 
-```text
-╔═╗ BUILD
+This is an early release: playback and streams are covered, and the remaining features
+are listed in [docs/migration.md](docs/migration.md). No performance claims are made.
+
+## Status
+
+| Area | State | Evidence |
+| --- | --- | --- |
+| Playback, queue, resume, streams | Working | Headless playback and stream tests |
+| Quality defaults, hardware decoding, tone mapping | Working | Options reach headless mpv in tests; looks and speed not measured |
+| Subtitle style, picture controls, night mode, ReplayGain, audio device | Working | Settings reach headless mpv in tests; not judged by eye or ear |
+| Shader presets | Working, none bundled | Lists files you put in `~/.config/lumen-rs/shaders` |
+| Media keys and MPRIS | New | Mapping logic tested; not yet run against a real desktop |
+| Packaging | Draft | `.desktop` and AppStream validated; Flatpak manifest never built |
+| Equalizer, online subtitles, preview frames | Not started | See [docs/migration.md](docs/migration.md) |
+
+## How it fits together
+
+```mermaid
+flowchart LR
+  UI["egui interface<br/>ui/, app.rs"] --> S["Session<br/>queue, resume, policy"]
+  S --> E["Engine<br/>libmpv wrapper"]
+  S --> T["Tuning<br/>settings to mpv options"]
+  T --> E
+  E --> V["Video<br/>GL texture"]
+  V --> UI
+  S --> ST["Streams<br/>Streamlink, yt-dlp"]
+  UI <--> M["Media keys<br/>worker thread, MPRIS"]
 ```
+
+## Feature matrix
+
+| Feature | Lumen | Notes |
+| --- | --- | --- |
+| Local files and network URLs | Yes | Through libmpv |
+| Hardware decoding | Yes | Picker: automatic, VA-API, NVDEC, off |
+| HDR video | Tone-mapped to SDR | Video renders into an 8-bit RGBA framebuffer; there is no HDR output |
+| User shaders | Yes | From `~/.config/lumen-rs/shaders`; none included |
+| Subtitle styling | Font, size, colours, outline, position | Applies to text subtitles |
+| Picture controls | Brightness, contrast, saturation, gamma, hue; aspect, rotate, crop | Crop needs mpv 0.41 or newer |
+| Audio | Night mode, ReplayGain, output device | Night mode is a loudnorm filter |
+| Twitch, Kick, YouTube | Yes | Needs Streamlink or yt-dlp installed |
+| Media keys / MPRIS | Yes | Play, pause, stop, next, previous; seek and volume from the desktop are not wired |
+| Equalizer, online subtitle search | No | Pending |
+| Packages | No | Draft Flatpak and `.desktop` files in `packaging/` |
+
+## Working today
+
+- Playback of local files and URLs through libmpv, with hardware decoding when available.
+- Play queue with shuffle, repeat, M3U import, drag and drop, and automatic
+  continuation with the next file in the folder (`ep2` is followed by `ep10`).
+- Resume where you left off, plus per-file memory of audio track, subtitle track,
+  audio and subtitle sync, and bookmarks.
+- Seek bar, frame stepping in both directions, chapters, A-B loop, speed from 0.25× to 4×,
+  and volume up to 200%.
+- Audio and subtitle track switching, and audio and subtitle delay in 50 ms steps.
+- Screenshots, fullscreen with auto-hiding controls, and a status line.
+- Lumen's own layout: a sidebar with **Open media**, **Network stream** and a filterable queue
+  (right-click for play, copy location and remove; **Save queue** writes an M3U), a "Now playing"
+  header with **Audio & subtitles**, **Video** and **…** menus, and a welcome screen with your
+  recent files. The same menus open on right-click over the picture.
+- A seek bar with a time (and chapter name) under the pointer, chapter ticks and the A-B loop
+  shown on it; click the picture to pause, double-click for fullscreen, scroll for volume.
+- Native file pickers for media and subtitle files, drag and drop with a drop hint, and
+  spinners while a link is being opened.
+- A mini player, and always on top where the desktop allows it.
+- Preferences with every setting and a keyboard tab to rebind any key, with conflicts refused.
+- Media information, chapters, bookmarks and recent files in the menus.
+- Live streams from Twitch, Kick and other sites through [Streamlink](https://streamlink.github.io),
+  run as a private relay on 127.0.0.1 so Streamlink's own ad handling applies, with a quality
+  picker and the stream's title.
+- YouTube and other video sites through [yt-dlp](https://github.com/yt-dlp/yt-dlp), including
+  sites that serve video and audio separately.
+- [SponsorBlock](https://sponsor.ajay.app): sponsor reads, self-promotion and subscribe
+  reminders in YouTube videos are skipped (intros and outros optionally).
+- An "Open network stream" dialog (Ctrl+L) for HTTP, HTTPS, RTSP, RTMP, UDP and RTP links.
+- Quality defaults (`profile=gpu-hq`), a hardware-decoding picker and a tone-mapping choice, under
+  **Preferences → Picture & sound**, together with subtitle style, picture controls, night mode,
+  ReplayGain and the audio output device.
+- Aspect, rotate and crop in the Video menu, and a Shaders menu for your own files in
+  `~/.config/lumen-rs/shaders` (Lumen ships none).
+- Media keys and MPRIS on a worker thread, so the desktop's play, pause, stop, next and previous work.
+- Its own profile in `~/.config/lumen-rs`.
+
+## Not yet
+
+Online subtitle search, the equalizer, seek-bar preview frames, zoom, flip and deinterlace,
+installable packages (a draft Flatpak manifest and `.desktop` files are in `packaging/`), and HDR
+output: HDR is shown tone-mapped to SDR because the video framebuffer is 8-bit RGBA.
+`docs/migration.md` tracks each item.
 
 ## Build and run
 
-Linux is the current target. Install a stable Rust toolchain, a C linker, the usual
-X11/Wayland and OpenGL runtime libraries, and mpv's library.
+Lumen builds on Linux, Windows and macOS. Install a stable Rust toolchain, a C linker
+and libmpv's development files, then `cargo run --release -- movie.mkv`.
 
-```sh
-sudo pacman -S mpv            # Arch; Debian and Ubuntu: libmpv-dev
-cargo run --release -- movie.mkv
-```
+| OS | libmpv |
+| --- | --- |
+| Debian, Ubuntu | `sudo apt install libmpv-dev libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev` |
+| Fedora | `sudo dnf install mpv-devel libxkbcommon-devel wayland-devel mesa-libEGL-devel` (full codecs need RPM Fusion's mpv) |
+| Arch | `sudo pacman -S mpv` |
+| macOS | `brew install mpv`, then `export LIBRARY_PATH=$(brew --prefix)/lib` |
+| Windows (MSVC) | `pwsh scripts/windows-libmpv.ps1` downloads libmpv and builds `mpv.lib`; needs `gh` and `7z` on `PATH`. Keep `libmpv-2.dll` beside the exe. |
+
+Settings live in `$XDG_CONFIG_HOME/lumen-rs` (Linux), `~/Library/Application Support/lumen-rs`
+(macOS) or `%APPDATA%\lumen-rs` (Windows). Installers and bundling are covered in
+[packaging/README.md](packaging/README.md).
 
 Streams need two optional programs on the `PATH`. Without them Lumen still plays files and
 direct links, but a Twitch or YouTube page will not open.
@@ -63,10 +134,6 @@ and tests against real Twitch and YouTube run only with `LUMEN_NETWORK_TESTS=1`.
 ```sh
 cargo test
 LUMEN_NETWORK_TESTS=1 cargo test --test streams   # optional, needs internet
-```
-
-```text
-╔═╗ KEYS
 ```
 
 ## Keys
@@ -91,30 +158,10 @@ To rebind a key, open **… → Keyboard shortcuts** (or Preferences, Ctrl+,), c
 press the new keys. Escape cancels, and a key another action uses is refused. The choices are
 stored under `keys` in `~/.config/lumen-rs/settings.json`.
 
-```text
-╔═╗ STREAMS
-```
-
 ## Streams and privacy
 
-> [!NOTE]
-> Lumen goes online only when you ask it to.
-
-It connects to play a link, or for SponsorBlock on a YouTube video. Which program handles a link:
-
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'background':'#0A0C10','primaryColor':'#11141A','primaryTextColor':'#E9ECF2','primaryBorderColor':'#232833','lineColor':'#5B8CFF','fontFamily':'monospace'}}}%%
-flowchart LR
-  L(["link"]) --> D{"kind"}
-  D -- "media / RTSP / RTMP / UDP" --> M["mpv"]
-  D -- "Twitch, Kick…" --> SL["Streamlink relay"] --> M
-  SL -. "fails" .-> Y["yt-dlp"]
-  D -- "YouTube, other" --> Y --> M
-  classDef n fill:#11141A,stroke:#232833,color:#E9ECF2
-  classDef a fill:#11141A,stroke:#7CF0C8,color:#7CF0C8
-  class L,D,SL,Y n
-  class M a
-```
+Lumen goes online only when you ask it to: to play a link, or for SponsorBlock on a
+YouTube video. Which program handles a link:
 
 - Plain media and playlist links (`.mp4`, `.m3u8`, …), RTSP, RTMP and UDP go straight to mpv.
 - A link Streamlink has a site plugin for, such as Twitch or Kick, plays through Streamlink.
@@ -130,30 +177,11 @@ contributors (CC BY-NC-SA 4.0).
 Settings in `settings.json`: `stream_quality` (`"best"`, or a name such as `"720p60"`),
 `low_latency` (Twitch and Kick), `sponsorblock`, and `sponsorblock_intros`.
 
-## The demo
-
-[`docs/demo.gif`](docs/demo.gif) is recorded from the real player, not mocked up. [`scripts/record-demo.sh`](scripts/record-demo.sh) makes
-a few silent clips (generated pictures with no audio stream), plays a scripted tour in a real
-window with injected mouse and key input, and encodes the frames (with gifski when it is installed, else ffmpeg). It needs ffmpeg and a desktop
-session, and the player runs muted. On a virtual display with software GL, set `DEMO_GRAB=1` so the
-screen itself is recorded. Rerun it after changing the interface.
-
-```text
-╔═╗ PROJECT
-```
-
 ## Project layout
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'background':'#0A0C10','primaryColor':'#11141A','primaryTextColor':'#E9ECF2','primaryBorderColor':'#232833','lineColor':'#7CF0C8','fontFamily':'monospace'}}}%%
-flowchart LR
-  UI["ui/ + app.rs"] --> S["session.rs"] --> E["engine.rs"] --> M[("libmpv")]
-  classDef n fill:#11141A,stroke:#232833,color:#E9ECF2
-  class UI,S,E,M n
-```
-
-Playback policy lives in `session.rs`, mpv calls in `engine.rs`, and the window in `app.rs`. Details in [`docs/architecture.md`](docs/architecture.md); what is and is not tested in [`docs/verification.md`](docs/verification.md). Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md). History: [`CHANGELOG.md`](CHANGELOG.md).
+See `docs/architecture.md`. Playback policy lives in `session.rs`, mpv calls in
+`engine.rs`, and the window in `app.rs`.
 
 ## License
 
-MIT. Playback uses mpv through its dynamic library; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+MIT. Playback uses mpv through its dynamic library; see `THIRD_PARTY_NOTICES.md`.

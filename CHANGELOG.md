@@ -1,12 +1,18 @@
 # Changelog
 
-## 0.4.0 — A new look
+## Unreleased
 
-A visual refresh. No behavior changes.
-
-- New visual identity: palette, logo (`assets/lumen.svg`) and type.
-- Minimal interface: quieter chrome, so the picture leads.
-- Rewritten README and docs with diagrams and tables.
+- Quality defaults: mpv `profile=gpu-hq` for the window, a hardware-decoding picker and an HDR
+  tone-mapping choice; the active decoder appears in Media information. HDR is shown tone-mapped to SDR
+  (the video framebuffer is 8-bit RGBA).
+- Subtitle font, size, colours, outline and position; brightness, contrast, saturation, gamma and hue;
+  aspect, rotate and crop in the Video menu.
+- Night mode (loudness normalisation), ReplayGain and an audio output device picker.
+- A Shaders menu listing files from `~/.config/lumen-rs/shaders` (none are bundled).
+- Media keys and MPRIS through a worker thread.
+- A `.desktop` file, AppStream metainfo and a draft Flatpak manifest.
+- README rewritten without the demo GIF (removed from the repository).
+- Visual refresh and documentation polish: architecture diagram, documentation nav links and badge formatting.
 
 ## 0.3.0 — A friendlier interface
 

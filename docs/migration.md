@@ -30,10 +30,15 @@ Lumen has its own executable, app ID and profile (`~/.config/lumen-rs`).
 | Audio and subtitle track switching | Implemented; tested |
 | Load subtitle file, remembered per file | Implemented; the picker dialog itself is untested |
 | Online subtitle search | Pending |
-| Subtitle font, size, colour and outline | Pending |
+| Subtitle font, size, colour, outline width and position | Implemented in Preferences → Picture & sound; the mapping to mpv options and headless mpv acceptance are tested, how it looks on screen is not |
 | 10-band equalizer and presets | Pending |
-| Audio output device | Pending |
-| Aspect, crop, zoom, rotate, flip, deinterlace, colour controls | Pending |
+| Audio output device, night mode (loudnorm), ReplayGain | Implemented in Preferences → Picture & sound; options reach headless mpv in tests, the audible result is not tested |
+| Aspect, crop, rotate | Implemented in the Video menu; crop needs mpv 0.41 or newer; set through mpv in tests, not checked visually |
+| Brightness, contrast, saturation, gamma, hue | Implemented in Preferences → Picture & sound; tested against headless mpv |
+| Zoom, flip, deinterlace | Pending |
+| Hardware decoding picker, HDR tone-mapping choice | Implemented; the active decoder shows in Media information. HDR is shown tone-mapped to SDR, because video is rendered into an 8-bit RGBA framebuffer; there is no HDR output |
+| Default quality profile (`gpu-hq`) | Set at start; skipped silently when the mpv build lacks it. Speed and quality cost are not measured |
+| User shaders (`~/.config/lumen-rs/shaders`) | Menu lists `.glsl`, `.hook` and `.frag` files and can switch several on; none are bundled; shader output is not verified |
 | Screenshots | Implemented; not covered by a test |
 | Rebindable keys | Preferences tab with capture and conflict refusal; tested |
 | Preferences and keyboard shortcut list | Implemented; tested |
@@ -41,9 +46,11 @@ Lumen has its own executable, app ID and profile (`~/.config/lumen-rs`).
 | Fullscreen with auto-hiding controls | Implemented; checked manually only |
 | Mini player | Implemented; the open and close logic is tested, the window resize is not |
 | Always on top | Implemented; not available on Wayland, where compositors decide |
-| Media keys, MPRIS, desktop media controls | Pending |
+| Media keys, MPRIS, desktop media controls | Implemented through `souvlaki` on a worker thread: play, pause, toggle, stop, next, previous and the title and position are published. Mapping and update logic are tested; no run against a real desktop is recorded yet. Seek and volume from the desktop are not wired |
 | Native Wayland video | Implemented; checked on one session |
-| Packaged distribution | Pending |
+| `.desktop` file and AppStream metainfo | Present in `packaging/linux` and checked with `desktop-file-validate` and `appstreamcli validate` |
+| Flatpak | Draft manifest in `packaging/flatpak`, never built; it lacks vendored cargo sources and libmpv's dependency modules |
+| Installable packages (deb, rpm, AppImage), release pipeline | Pending |
 | Measured speed, memory or latency improvements | Not established |
 
 Settings from other players are not imported, because track ids are assigned by mpv.

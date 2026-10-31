@@ -29,7 +29,15 @@ pub struct Video {
     _mpv: Arc<Mpv>,
     /// Size of the picture drawn into the top-left of the target this frame.
     size: (i32, i32),
-    target: Option<(glow::Framebuffer, egui::TextureId)>,
+    target: Option<Target>,
+}
+
+/// The offscreen framebuffer mpv draws into, with the texture behind it.
+struct Target {
+    framebuffer: glow::Framebuffer,
+    texture: egui::TextureId,
+    /// The context the framebuffer belongs to, kept so `Drop` can delete it.
+    gl: Arc<glow::Context>,
 }
 
 // The render context is only used from the paint callback, with the GL context current.
@@ -74,9 +82,13 @@ impl Video {
     }
 
     /// Creates the target on first use and returns the texture to show.
-    pub fn texture(&mut self, gl: &glow::Context, frame: &mut eframe::Frame) -> egui::TextureId {
-        if let Some((_, id)) = self.target {
-            return id;
+    pub fn texture(
+        &mut self,
+        gl: &Arc<glow::Context>,
+        frame: &mut eframe::Frame,
+    ) -> egui::TextureId {
+        if let Some(target) = &self.target {
+            return target.texture;
         }
         unsafe {
             let texture = gl.create_texture().expect("create texture");
@@ -113,7 +125,11 @@ impl Video {
             );
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             let id = frame.register_native_glow_texture(texture);
-            self.target = Some((framebuffer, id));
+            self.target = Some(Target {
+                framebuffer,
+                texture: id,
+                gl: gl.clone(),
+            });
             id
         }
     }
@@ -131,7 +147,7 @@ impl Video {
 
     /// Renders the current frame. Must run with eframe's GL context current.
     pub fn draw(&mut self, gl: &glow::Context) {
-        let Some((framebuffer, _)) = self.target else {
+        let Some(framebuffer) = self.target.as_ref().map(|t| t.framebuffer) else {
             return;
         };
         unsafe {
@@ -149,6 +165,19 @@ impl Video {
                 glow::FRAMEBUFFER,
                 std::num::NonZeroU32::new(previous).map(glow::NativeFramebuffer),
             );
+        }
+    }
+}
+
+impl Drop for Video {
+    /// Frees the framebuffer; `App::on_exit` drops the video while eframe's GL context is still
+    /// current. The texture is not deleted here: it was registered with egui's painter, which
+    /// owns it and deletes it when the painter is destroyed. `render` is freed after this runs,
+    /// and before `_mpv`, by field order.
+    fn drop(&mut self) {
+        if let Some(target) = self.target.take() {
+            // SAFETY: the framebuffer was created on `target.gl` and is used by nothing else.
+            unsafe { target.gl.delete_framebuffer(target.framebuffer) };
         }
     }
 }

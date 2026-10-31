@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.DakodaStemen.Lumen</id>
+  <name>Lumen</name>
+  <summary>A native media player built on libmpv</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">io.github.DakodaStemen.Lumen.desktop</launchable>
+  <description><p>Lumen plays every format libmpv does, with a seek bar preview, chapters, A-B loop, queue and Twitch/YouTube links through Streamlink and yt-dlp.</p></description>
+  <url type="homepage">https://github.com/DakodaStemen/lumen-rs</url>
+  <provides><binary>lumen-rs</binary></provides>
+  <content_rating type="oars-1.1"/>
+  <releases><release version="0.3.0" date="2026-01-01"/></releases>
+</component>

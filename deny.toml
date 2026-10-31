@@ -1,0 +1,23 @@
+# Policy follows caelum-rs; license set derived from `cargo deny list`.
+[advisories]
+# Transitive unmaintained crates: no direct replacement in Lumen. Revisit when
+# eframe/accesskit/rfd update their dependency graphs. These are not blanket
+# vulnerability exceptions; new advisory IDs still fail the check.
+ignore = [
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser via eframe/epaint; await upstream migration" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names via accesskit/rfd; await upstream migration" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant via accesskit/rfd; await upstream migration" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via accesskit/rfd; await upstream migration" },
+]
+
+[licenses]
+# LGPL bindings require redistribution/relinking compliance; see notices.
+allow = [
+  "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0",
+  "0BSD", "BSL-1.0", "CDLA-Permissive-2.0", "LGPL-2.1",
+  "LGPL-2.1-or-later", "OFL-1.1", "Ubuntu-font-1.0", "Unlicense",
+]
+
+[bans]
+multiple-versions = "warn"

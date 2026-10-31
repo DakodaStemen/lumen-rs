@@ -60,6 +60,7 @@ pub struct UrlDialog {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefsTab {
     Playback,
+    Picture,
     Streams,
     Keys,
 }
@@ -95,12 +96,7 @@ pub struct Frontend {
     brand: Option<egui::TextureHandle>,
 }
 
-/// Compositors, not applications, decide stacking on Wayland.
-pub fn always_on_top_supported() -> bool {
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
-        && std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("x11");
-    !wayland
-}
+pub use crate::platform::always_on_top_supported;
 
 impl Frontend {
     pub fn new(session: Session, ctx: &egui::Context) -> Self {

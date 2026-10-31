@@ -5,6 +5,7 @@ use eframe::egui::{self, Align2, Color32, RichText, Vec2};
 use super::{Frontend, PrefsTab, UrlDialog, geometry, theme};
 use crate::keys::{self, Action, binding_text};
 use crate::streams::is_network_url;
+use crate::tuning;
 
 /// Warnings and failures; the theme has no dedicated error colour.
 const ERROR: Color32 = Color32::from_rgb(0xf0, 0x8a, 0x80);
@@ -60,6 +61,7 @@ impl Frontend {
         };
         let mut open = true;
         let mut submit = false;
+        let mut cancel = false;
         window("Open network stream")
             .open(&mut open)
             .show(ctx, |ui| {
@@ -81,7 +83,13 @@ impl Frontend {
                 ui.horizontal(|ui| {
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     submit = theme::primary(ui, "Open", Some(100.0)).clicked() || enter;
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
                 });
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancel = true;
+                }
             });
         if submit {
             if is_network_url(&text) {
@@ -89,7 +97,7 @@ impl Frontend {
                 return;
             }
             rejected = true;
-        } else if !open {
+        } else if !open || cancel {
             return;
         }
         self.url = Some(UrlDialog { text, rejected });
@@ -102,12 +110,14 @@ impl Frontend {
         let mut open = true;
         let mut keys_changed = false;
         let mut settings_changed = false;
+        let mut tuning_changed = false;
         window("Preferences").open(&mut open).show(ctx, |ui| {
             ui.set_min_width(500.0);
             ui.spacing_mut().item_spacing.y = GAP;
             ui.horizontal(|ui| {
                 for (tab, label) in [
                     (PrefsTab::Playback, "Playback"),
+                    (PrefsTab::Picture, "Picture & sound"),
                     (PrefsTab::Streams, "Streams"),
                     (PrefsTab::Keys, "Keyboard"),
                 ] {
@@ -146,16 +156,133 @@ impl Frontend {
                         )
                         .changed();
                 }
+                PrefsTab::Picture => {
+                    section(ui, "Decoding and HDR");
+                    ui.horizontal(|ui| {
+                        ui.label("Hardware decoding");
+                        let shown = tuning::HWDEC
+                            .iter()
+                            .find(|(v, _)| *v == s.hwdec)
+                            .map_or("Automatic (safe)", |(_, l)| *l);
+                        egui::ComboBox::from_id_salt("hwdec")
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                for (value, label) in tuning::HWDEC {
+                                    tuning_changed |= ui
+                                        .selectable_value(&mut s.hwdec, value.to_owned(), label)
+                                        .changed();
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("HDR tone mapping");
+                        egui::ComboBox::from_id_salt("tone")
+                            .selected_text(s.tone_mapping.clone())
+                            .show_ui(ui, |ui| {
+                                for value in tuning::TONE_MAPPING {
+                                    tuning_changed |= ui
+                                        .selectable_value(&mut s.tone_mapping, value.to_owned(), value)
+                                        .changed();
+                                }
+                            });
+                    });
+                    ui.label(theme::muted(
+                        "Video is drawn into an 8-bit RGBA texture, so HDR is shown tone-mapped to SDR.",
+                    ));
+                    section(ui, "Subtitles");
+                    ui.horizontal(|ui| {
+                        ui.label("Font");
+                        tuning_changed |= ui
+                            .add(egui::TextEdit::singleline(&mut s.subtitles.font).desired_width(160.0).hint_text("mpv default"))
+                            .changed();
+                        ui.label("Size");
+                        tuning_changed |= ui
+                            .add(egui::DragValue::new(&mut s.subtitles.size).range(8..=200))
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        for (label, value) in [("Text", &mut s.subtitles.color), ("Outline", &mut s.subtitles.border_color)] {
+                            ui.label(label);
+                            let mut rgb = tuning::color_rgb(value).unwrap_or([255, 255, 255]);
+                            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                *value = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                                tuning_changed = true;
+                            }
+                        }
+                        ui.label("Outline width");
+                        tuning_changed |= ui
+                            .add(egui::DragValue::new(&mut s.subtitles.border).range(0.0..=10.0).speed(0.1))
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Position (0 top, 100 bottom)");
+                        tuning_changed |= ui
+                            .add(egui::Slider::new(&mut s.subtitles.pos, 0..=100))
+                            .changed();
+                    });
+                    section(ui, "Picture");
+                    for (label, value) in [
+                        ("Brightness", &mut s.picture.brightness),
+                        ("Contrast", &mut s.picture.contrast),
+                        ("Saturation", &mut s.picture.saturation),
+                        ("Gamma", &mut s.picture.gamma),
+                        ("Hue", &mut s.picture.hue),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{label:<10}"));
+                            tuning_changed |= ui.add(egui::Slider::new(value, -100..=100)).changed();
+                        });
+                    }
+                    if ui.button("Reset picture").clicked() {
+                        s.picture = Default::default();
+                        tuning_changed = true;
+                    }
+                    section(ui, "Audio");
+                    tuning_changed |= ui
+                        .checkbox(&mut s.audio.night_mode, "Night mode (loudness normalisation, narrow range)")
+                        .changed();
+                    ui.horizontal(|ui| {
+                        ui.label("ReplayGain");
+                        for (value, label) in tuning::REPLAYGAIN {
+                            tuning_changed |= ui
+                                .selectable_value(&mut s.audio.replaygain, value.to_owned(), label)
+                                .changed();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Output device");
+                        let devices = self.session.engine.audio_devices();
+                        let shown = devices
+                            .iter()
+                            .find(|(n, _)| *n == s.audio.device)
+                            .map_or(s.audio.device.clone(), |(_, d)| d.clone());
+                        egui::ComboBox::from_id_salt("audio-device")
+                            .selected_text(shown)
+                            .width(260.0)
+                            .show_ui(ui, |ui| {
+                                for (name, description) in &devices {
+                                    tuning_changed |= ui
+                                        .selectable_value(&mut s.audio.device, name.clone(), description)
+                                        .changed();
+                                }
+                            });
+                    });
+                }
                 PrefsTab::Streams => {
                     section(ui, "Quality");
                     ui.horizontal(|ui| {
                         ui.label("Default quality");
-                        settings_changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(&mut s.stream_quality)
-                                    .desired_width(110.0),
-                            )
-                            .changed();
+                        let field = ui.add(
+                            egui::TextEdit::singleline(&mut s.stream_quality)
+                                .desired_width(110.0)
+                                .hint_text("best"),
+                        );
+                        settings_changed |= field.changed();
+                        // Fill in the default only once editing is over, so the field can be cleared while typing.
+                        if field.lost_focus() && s.stream_quality.trim().is_empty() {
+                            s.stream_quality = "best".to_owned();
+                            settings_changed = true;
+                        }
                         ui.label(theme::muted("best, or a name such as 720p60"));
                     });
                     section(ui, "Live and video sites");
@@ -173,9 +300,6 @@ impl Frontend {
                             .checkbox(&mut s.sponsorblock_intros, "Also skip intros and outros")
                             .changed();
                     });
-                    if s.stream_quality.trim().is_empty() {
-                        s.stream_quality = "best".to_owned();
-                    }
                     section(ui, "Helper tools");
                     let tools = &self.session.streams.tools;
                     tool_status(
@@ -196,7 +320,7 @@ impl Frontend {
                         "Click a shortcut, then press the new keys. Escape cancels.",
                     ));
                     egui::ScrollArea::vertical()
-                        .max_height(330.0)
+                        .max_height((ctx.content_rect().height() - 230.0).clamp(120.0, 330.0))
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             egui::Grid::new("keys")
@@ -274,13 +398,16 @@ impl Frontend {
             ui.add_space(GAP / 2.0);
             let version = self.session.engine.version();
             ui.label(theme::muted(format!(
-                "Lumen Rust {} · {}",
+                "Lumen {} · {}",
                 env!("CARGO_PKG_VERSION"),
                 version
             )));
         });
         if keys_changed {
             self.rebuild_keymap();
+        }
+        if tuning_changed {
+            self.session.apply_settings();
         }
         if keys_changed || settings_changed {
             self.session.store.save_settings();
@@ -317,7 +444,8 @@ impl Frontend {
                         .show(ui, |ui| {
                             for (label, value) in &rows {
                                 ui.label(theme::muted(label));
-                                ui.label(value);
+                                ui.add(egui::Label::new(value).truncate())
+                                    .on_hover_text(value);
                                 ui.end_row();
                             }
                         });

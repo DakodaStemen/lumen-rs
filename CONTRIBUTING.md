@@ -11,8 +11,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-After a visible interface change, rerun `scripts/record-demo.sh` and check the GIF. The recorder
-aims at widgets by name, and a test keeps those names reporting their positions.
+The UI tests and the demo recorder (`scripts/record-demo.sh`, which writes a clip for your own
+checking and is no longer part of the README) aim at widgets by name, and a test keeps those
+names reporting their positions.
 
 Changes to rendering, input or fullscreen also need a run in the real window, on
 Wayland and X11 if you can. Report the checks you ran and their limitations; do not
