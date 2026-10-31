@@ -91,6 +91,16 @@ fn lock_down(init: &libmpv2::MpvInitializer) -> libmpv2::Result<()> {
     Ok(())
 }
 
+/// What mpv last said about the file it was asked to play.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileEvent {
+    Loaded,
+    /// A file started or ended normally.
+    Changed,
+    /// The file ended with an error: missing, unreadable or not media.
+    Failed,
+}
+
 impl Engine {
     pub fn new(output: Output, volume: u32) -> Result<Self> {
         // mpv refuses to start unless numbers are parsed with the C locale.
@@ -198,24 +208,24 @@ impl Engine {
         self.command("stop", &[]);
     }
 
-    /// Drains mpv's event queue. Returns `Some(true)` when the latest file event was
-    /// "file loaded", `Some(false)` when a file has since started or ended, and `None`
-    /// when no file event arrived.
+    /// Drains mpv's event queue and returns the latest file event, if any arrived.
     ///
     /// `stop` and `loadfile` are asynchronous: for a moment after them mpv still reports the
     /// previous file's state (newer builds keep it longer), so only this event says the file
     /// just asked for is the one playing. Only `Session` calls this, from one thread.
-    pub fn poll_file_loaded(&self) -> Option<bool> {
+    pub fn poll_file_event(&self) -> Option<FileEvent> {
         use libmpv2::events::Event;
-        let mut loaded = None;
+        let mut latest = None;
         while let Some(event) = self.mpv.wait_event(0.0) {
             match event {
-                Ok(Event::FileLoaded) => loaded = Some(true),
-                Ok(Event::StartFile | Event::EndFile(_)) | Err(_) => loaded = Some(false),
+                Ok(Event::FileLoaded) => latest = Some(FileEvent::Loaded),
+                Ok(Event::StartFile | Event::EndFile(_)) => latest = Some(FileEvent::Changed),
+                // An end-of-file with an error code: the file could not be opened or decoded.
+                Err(_) => latest = Some(FileEvent::Failed),
                 _ => {}
             }
         }
-        loaded
+        latest
     }
 
     /// The location mpv is playing, which for streams differs from the queue entry.

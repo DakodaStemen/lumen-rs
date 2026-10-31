@@ -979,6 +979,8 @@ impl Frontend {
         let state = self.session.state();
         if !current && !self.dropping {
             self.empty_state(ui, rect);
+        } else if let Some(error) = self.session.error().map(str::to_owned) {
+            self.error_state(ui, rect, &error);
         } else if self.session.streams.activity().is_some()
             || matches!(state, State::Opening | State::Buffering)
         {
@@ -1036,6 +1038,68 @@ impl Frontend {
                 Color32::WHITE,
             );
         }
+    }
+
+    /// What went wrong with the current entry, laid out like a GNOME status page.
+    fn error_state(&self, ui: &mut egui::Ui, rect: egui::Rect, error: &str) {
+        let title = self
+            .session
+            .queue
+            .current
+            .and_then(|c| self.session.queue.items.get(c))
+            .map(|item| item.title.clone())
+            .unwrap_or_default();
+        let width = (rect.width() - 48.0).clamp(80.0, 420.0);
+        let tall = rect.height() > 260.0;
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_center_size(
+                    rect.center(),
+                    Vec2::new(width, rect.height()),
+                ))
+                .layout(Layout::top_down(Align::Center)),
+        );
+        child.spacing_mut().item_spacing.y = 0.0;
+        // Centred on the height the page took last frame.
+        let height_id = egui::Id::new("error-state-height");
+        let content: f32 = ui.ctx().data(|d| d.get_temp(height_id)).unwrap_or(160.0);
+        let top = ((rect.height() - content) / 2.0).max(8.0);
+        child.add_space(top);
+        if tall {
+            let (at, _) = child.allocate_exact_size(Vec2::splat(64.0), Sense::hover());
+            icons::paint(&child, Icon::Error, at, 64.0, Color32::from_white_alpha(90));
+            child.add_space(20.0);
+        }
+        // Over the black picture, so drawn light whatever the desktop scheme.
+        let heading = (self.body_size * 1.4).round();
+        child.add(
+            egui::Label::new(
+                RichText::new("Unable to play")
+                    .size(heading)
+                    .strong()
+                    .color(Color32::WHITE),
+            )
+            .selectable(false),
+        );
+        child.add_space(8.0);
+        if !title.is_empty() {
+            child
+                .add(
+                    egui::Label::new(RichText::new(&title).color(Color32::from_gray(220)))
+                        .truncate()
+                        .selectable(false),
+                )
+                .on_hover_text(&title);
+            child.add_space(4.0);
+        }
+        child.add(
+            egui::Label::new(RichText::new(error).color(Color32::from_gray(170)))
+                .wrap()
+                .halign(Align::Center)
+                .selectable(false),
+        );
+        let used = child.min_rect().height() - top;
+        ui.ctx().data_mut(|d| d.insert_temp(height_id, used));
     }
 
     /// Ongoing work worth a word over the picture: opening a link, or an A-B loop.

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::clock::clock;
-use crate::engine::{Chapter, Engine, TrackKind};
+use crate::engine::{Chapter, Engine, FileEvent, TrackKind};
 use crate::keys::{Action, binding_text};
 use crate::queue::{Queue, is_url};
 use crate::sponsorblock::{self, Segment};
@@ -70,6 +70,8 @@ pub struct Session {
     file_loaded: bool,
     last_save: Instant,
     flash: Option<(String, Instant)>,
+    /// Why the current entry could not be played, while that is the case.
+    error: Option<String>,
 }
 
 impl Session {
@@ -92,6 +94,7 @@ impl Session {
             file_loaded: false,
             last_save: Instant::now(),
             flash: None,
+            error: None,
         }
     }
 
@@ -125,6 +128,7 @@ impl Session {
         let removing_current = self.queue.current == Some(index);
         self.queue.remove(index);
         if removing_current {
+            self.error = None;
             self.finished = true; // nothing left to save progress for
             self.streams.stop();
             self.engine.stop();
@@ -158,6 +162,7 @@ impl Session {
         self.queue.current = Some(index);
         self.finished = false;
         self.was_started = false;
+        self.error = None;
         self.clear_loop();
         self.store.remember_recent(&source);
         self.pending = Pending { start_ms, paused };
@@ -208,8 +213,9 @@ impl Session {
         }
         self.restore_pending = true;
         // Events from earlier files must not count as this one loading.
-        self.engine.poll_file_loaded();
+        self.engine.poll_file_event();
         self.file_loaded = false;
+        self.error = None;
         if !self
             .engine
             .load(mrl, start.map(|ms| ms as f64 / 1000.0), paused, audio)
@@ -230,10 +236,17 @@ impl Session {
 
     /// A live stream has no length to seek within and no position worth resuming.
     pub fn is_live(&self) -> bool {
+        // Until mpv has loaded the file its length is unknown; that is not a live stream.
         self.live_relay
             || (self.queue.current.is_some()
+                && self.file_loaded
                 && !self.engine.idle()
                 && self.engine.duration_ms().is_none())
+    }
+
+    /// Why the current entry could not be played, while it could not.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     pub fn state(&self) -> State {
@@ -272,8 +285,14 @@ impl Session {
     /// Call regularly (Lumen does so every 200 ms). Drives resume, autosave and auto-advance.
     pub fn tick(&mut self) {
         self.handle_stream_events();
-        if let Some(loaded) = self.engine.poll_file_loaded() {
-            self.file_loaded = loaded;
+        match self.engine.poll_file_event() {
+            Some(FileEvent::Loaded) => self.file_loaded = true,
+            Some(FileEvent::Changed) => self.file_loaded = false,
+            Some(FileEvent::Failed) => {
+                self.file_loaded = false;
+                self.error = self.source().map(|s| failure_message(&s).to_owned());
+            }
+            None => {}
         }
         let state = self.state();
         if state == State::Playing {
@@ -582,6 +601,7 @@ impl Session {
     pub fn clear_queue(&mut self) {
         self.stop();
         self.finished = true;
+        self.error = None;
         self.queue.clear();
     }
 
@@ -851,6 +871,17 @@ impl Session {
             text += &format!("   ·   LOOP {} – {b}", clock(a));
         }
         text + "   /   mpv"
+    }
+}
+
+/// Why `source` could not be played, in words for the person watching.
+pub fn failure_message(source: &str) -> &'static str {
+    if is_url(source) {
+        "The stream could not be opened. Check the link and your connection."
+    } else if !Path::new(source).exists() {
+        "The file could not be found. It may have been moved or deleted."
+    } else {
+        "The file is damaged or in a format Lumen cannot play."
     }
 }
 
