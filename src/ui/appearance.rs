@@ -296,6 +296,7 @@ pub fn parse_font_name(value: &str) -> Option<(String, Option<f32>)> {
 }
 
 /// Font files egui can read.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 fn loadable(path: &std::path::Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
         matches!(
