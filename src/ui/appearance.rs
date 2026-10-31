@@ -30,7 +30,8 @@ pub const DEFAULT_ACCENT: Color32 = Color32::from_rgb(0x35, 0x84, 0xe4);
 impl Appearance {
     /// The light or dark choice to draw with: the desktop's, else the window system's, else dark.
     pub fn resolve(&self, ctx: &egui::Context) -> Scheme {
-        self.scheme
+        scheme_override()
+            .or(self.scheme)
             .or_else(|| {
                 ctx.system_theme().map(|t| match t {
                     egui::Theme::Dark => Scheme::Dark,
@@ -75,6 +76,20 @@ pub fn watch(ctx: &egui::Context) -> Option<Receiver<Appearance>> {
     {
         let _ = ctx;
         None
+    }
+}
+
+/// `LUMEN_COLOR_SCHEME=light` or `dark` overrides the desktop, for trying the other look
+/// without changing the desktop's settings.
+pub fn scheme_override() -> Option<Scheme> {
+    parse_scheme_override(std::env::var("LUMEN_COLOR_SCHEME").ok()?.as_str())
+}
+
+pub fn parse_scheme_override(value: &str) -> Option<Scheme> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "dark" => Some(Scheme::Dark),
+        "light" => Some(Scheme::Light),
+        _ => None,
     }
 }
 
@@ -409,6 +424,14 @@ mod tests {
             None,
             "out of range means unset"
         );
+    }
+
+    #[test]
+    fn the_scheme_can_be_forced_from_the_environment() {
+        assert_eq!(parse_scheme_override("light"), Some(Scheme::Light));
+        assert_eq!(parse_scheme_override(" Dark\n"), Some(Scheme::Dark));
+        assert_eq!(parse_scheme_override(""), None);
+        assert_eq!(parse_scheme_override("auto"), None);
     }
 
     #[test]
