@@ -219,6 +219,12 @@ impl Frontend {
                             .shortcut_text(clock(chapter.time_ms)),
                     )
                     .on_hover_text(&name);
+                // Screen readers hear the full title and its time.
+                let spoken = format!("{name}   {}", clock(chapter.time_ms));
+                let (enabled, current) = (response.enabled(), now == Some(index));
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, current, &spoken)
+                });
                 geometry::note(ui.ctx(), &name, response.rect);
                 if response.clicked() {
                     ui.close();
