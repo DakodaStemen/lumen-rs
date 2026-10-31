@@ -67,23 +67,25 @@ fn dialog(
             }
             // In a short window the body scrolls, so the header and its close button stay
             // in view with a little of the window showing above and below.
-            egui::ScrollArea::vertical()
-                .id_salt("dialog-body")
-                .max_height(body_height)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin {
-                            left: 24,
-                            right: 24,
-                            top: 6,
-                            bottom: 24,
-                        })
-                        .show(ui, |ui| {
-                            ui.set_width(width - 48.0);
-                            content(ui)
-                        });
-                });
+            theme::with_height(ui, body_height, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("dialog-body")
+                    .max_height(body_height)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin {
+                                left: 24,
+                                right: 24,
+                                top: 6,
+                                bottom: 24,
+                            })
+                            .show(ui, |ui| {
+                                ui.set_width(width - 48.0);
+                                content(ui)
+                            });
+                    });
+            });
         });
     open
 }

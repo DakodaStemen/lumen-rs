@@ -108,7 +108,9 @@ fn submenu<R>(ui: &mut Ui, label: &str, gutter: bool, content: impl FnOnce(&mut 
     let response = egui::containers::menu::SubMenuButton::from_button(button)
         .ui(ui, |ui| {
             begin(ui, 200.0, gutter);
-            let max = ui.ctx().content_rect().height() - 12.0 - 16.0;
+            // Room from where the submenu starts down to just above the window's bottom
+            // edge, so it opens beside its row instead of being pushed over the menu.
+            let max = ui.ctx().content_rect().bottom() - ui.max_rect().top() - 6.0 - 12.0;
             theme::scroll_menu(ui, max, content)
         })
         .0;

@@ -502,17 +502,28 @@ fn popover<R>(response: &Response, width: f32, content: impl FnOnce(&mut Ui) -> 
     });
 }
 
+/// Runs `add` with up to `height` points to grow into below the cursor. A popup or dialog
+/// is laid out within the size it had last frame (egui's 400-point default the first time),
+/// which would otherwise stop a scroll area in it from ever growing taller.
+pub fn with_height<R>(ui: &mut Ui, height: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let size = Vec2::new(ui.available_width(), height.max(0.0));
+    ui.allocate_ui(size, add).inner
+}
+
 /// Lets a menu taller than `max_height` scroll instead of running off the window.
 pub fn scroll_menu<R>(ui: &mut Ui, max_height: f32, content: impl FnOnce(&mut Ui) -> R) -> R {
     // A bar that takes its own room, so it never covers the shortcuts on the right.
     ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     // Long labels are already cut short; a row never breaks onto a second line.
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-    egui::ScrollArea::vertical()
-        .max_height(max_height.max(64.0))
-        .auto_shrink([true, true])
-        .show(ui, content)
-        .inner
+    let max_height = max_height.max(64.0);
+    with_height(ui, max_height, |ui| {
+        egui::ScrollArea::vertical()
+            .max_height(max_height)
+            .auto_shrink([true, true])
+            .show(ui, content)
+            .inner
+    })
 }
 
 /// Whether the popover belonging to `response` is open.
