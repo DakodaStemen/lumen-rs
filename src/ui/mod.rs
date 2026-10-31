@@ -1249,13 +1249,27 @@ impl Frontend {
             .zip(duration)
             .map_or(position, |(v, d)| (v as f64 * d as f64) as i64);
 
+        // Both times get the room of the longer one, so a ten-hour file's "10:00:00" fits and
+        // the bar stays centred.
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let label_width = [clock(shown), clock(duration.unwrap_or(0))]
+            .into_iter()
+            .map(|t| {
+                ui.painter()
+                    .layout_no_wrap(t, font.clone(), Color32::WHITE)
+                    .size()
+                    .x
+            })
+            .fold(40.0_f32, f32::max)
+            .ceil()
+            + 12.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.add_sized(
-                [56.0, 24.0],
+                [label_width, 24.0],
                 egui::Label::new(RichText::new(clock(shown)).weak()),
             );
-            let width = (ui.available_width() - 60.0).max(40.0);
+            let width = (ui.available_width() - label_width - 4.0).max(40.0);
             let value = match (self.scrubbing, duration) {
                 (Some(v), _) => v,
                 (None, _) if live => 1.0,
@@ -1286,6 +1300,7 @@ impl Frontend {
                     enabled: seekable,
                     markers: &markers,
                     band,
+                    faded: false,
                 },
             );
             geometry::note(ui.ctx(), "Seek bar", output.response.rect);
@@ -1317,7 +1332,7 @@ impl Frontend {
             } else {
                 RichText::new(clock(duration.unwrap_or(0))).weak()
             };
-            ui.add_sized([56.0, 24.0], egui::Label::new(end));
+            ui.add_sized([label_width, 24.0], egui::Label::new(end));
         });
     }
 
@@ -1438,6 +1453,7 @@ impl Frontend {
                     enabled: true,
                     markers: &[0.5],
                     band: None,
+                    faded: muted,
                 },
             );
             geometry::note(&ctx, "Volume bar", output.response.rect);

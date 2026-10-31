@@ -12,6 +12,8 @@ pub struct Bar<'a> {
     pub markers: &'a [f32],
     /// A highlighted stretch, such as an A-B loop.
     pub band: Option<(f32, f32)>,
+    /// Drawn without the accent while still usable, such as the volume while muted.
+    pub faded: bool,
 }
 
 pub struct BarOutput {
@@ -70,7 +72,9 @@ pub fn show(ui: &mut Ui, size: Vec2, bar: &Bar) -> BarOutput {
             painter.rect_filled(band, CornerRadius::same(2), p.warning.gamma_multiply(0.4));
         }
         let shown = bar.value.clamp(0.0, 1.0);
-        let fill = if bar.enabled {
+        let fill = if bar.faded {
+            p.dim
+        } else if bar.enabled {
             p.accent
         } else {
             p.dim.gamma_multiply(0.5)
