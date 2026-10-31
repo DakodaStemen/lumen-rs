@@ -578,7 +578,7 @@ impl Frontend {
             .fixed_pos(screen.min)
             .order(Order::Middle)
             .show(ctx, |ui| {
-                let (rect, response) = ui.allocate_exact_size(screen.size(), Sense::click());
+                let (rect, response) = ui.allocate_exact_size(screen.size(), Sense::CLICK);
                 ui.painter()
                     .rect_filled(rect, 0.0, Color32::from_black_alpha(90));
                 if response.clicked() {
@@ -958,10 +958,11 @@ impl Frontend {
         let ctx = ui.ctx().clone();
         // The mini player has no header bar, so dragging the picture moves the window.
         let movable = compact && !is_fullscreen(&ctx);
+        // The picture is reached with the shortcuts, not as a Tab stop with nothing to show.
         let sense = if movable {
-            Sense::click_and_drag()
+            Sense::CLICK | Sense::DRAG
         } else {
-            Sense::click()
+            Sense::CLICK
         };
         let response = ui.interact(rect, ui.id().with("video"), sense);
         if movable && response.drag_started_by(egui::PointerButton::Primary) && self.edge.is_none()

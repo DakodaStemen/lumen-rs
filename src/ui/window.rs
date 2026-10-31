@@ -98,7 +98,8 @@ pub fn is_maximized(ctx: &egui::Context) -> bool {
 /// Makes `rect` move the window when dragged and maximize it when double-clicked. Call before
 /// drawing the buttons on it, so they take the pointer first.
 pub fn drag_area(ui: &Ui, rect: Rect, id: &str, resizing: bool) {
-    let response = ui.interact(rect, ui.id().with(id), Sense::click_and_drag());
+    // Not a Tab stop: there is nothing to do with it from the keyboard.
+    let response = ui.interact(rect, ui.id().with(id), Sense::CLICK | Sense::DRAG);
     if response.drag_started_by(egui::PointerButton::Primary) && !resizing {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }
@@ -152,6 +153,13 @@ fn control(ui: &mut Ui, icon: Icon, name: &str) -> Response {
         ui.painter()
             .circle_filled(centre, 12.0, base.gamma_multiply(alpha));
         icons::paint(ui, icon, rect, 16.0, p.text);
+        if response.has_focus() {
+            ui.painter().circle_stroke(
+                centre,
+                13.0,
+                Stroke::new(2.0_f32, p.accent.gamma_multiply(0.6)),
+            );
+        }
     }
     theme::finish(response, name, "", None)
 }
