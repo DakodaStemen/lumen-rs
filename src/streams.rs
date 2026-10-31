@@ -120,6 +120,150 @@ pub fn is_network_url(text: &str) -> bool {
         })
 }
 
+/// What the network dialog's field starts with, so a bare `twitch.tv/name` needs nothing more.
+pub const URL_PREFIX: &str = "https://";
+
+/// Splits `text` at a leading `scheme://`, if it has one. The scheme is returned as typed.
+fn split_scheme(text: &str) -> Option<(&str, &str)> {
+    let (scheme, rest) = text.split_once("://")?;
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    valid.then_some((scheme, rest))
+}
+
+fn is_http(scheme: &str) -> bool {
+    scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+}
+
+/// Whether `text` reads as a path on this machine rather than a link: `/home/…`, `~/…`,
+/// `./…`, `C:\…`, `C:/…` or `\\server\share`.
+pub fn looks_like_local_path(text: &str) -> bool {
+    let text = text.trim();
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    drive
+        || (text.starts_with('/') && !text.starts_with("//"))
+        || text.starts_with('\\')
+        || text.starts_with('~')
+        || text.starts_with("./")
+        || text.starts_with("../")
+}
+
+/// Drops the field's own `https://` when a full link was typed or pasted after it, so
+/// `https://https://x` or `https://rtmp://x` becomes the link that was meant. `None` when
+/// there is nothing to drop.
+pub fn strip_doubled_scheme(text: &str) -> Option<String> {
+    let mut current = text.trim_start();
+    let mut changed = false;
+    while let Some((scheme, rest)) = split_scheme(current) {
+        let rest = rest.trim_start();
+        if !is_http(scheme) || split_scheme(rest).is_none() {
+            break;
+        }
+        current = rest;
+        changed = true;
+    }
+    changed.then(|| current.to_owned())
+}
+
+/// Whether a link typed without a scheme starts with something that can only be a host:
+/// a dotted name such as `twitch.tv` (but not a bare `film.mkv`), `localhost` or an IP address,
+/// optionally with a port.
+fn starts_with_host(text: &str) -> bool {
+    let authority = text.split(['/', '?', '#']).next().unwrap_or("");
+    let (user, host_port) = authority.rsplit_once('@').unwrap_or(("", authority));
+    // `mailto:me@example.com` is not `user:password@host`.
+    if user.contains(':') {
+        return false;
+    }
+    if host_port.starts_with('[') {
+        // [IPv6]:port
+        return host_port.split_once(']').is_some_and(|(_, port)| {
+            port.is_empty() || port.strip_prefix(':').is_some_and(is_port)
+        });
+    }
+    let (host, port) = match host_port.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (host_port, None),
+    };
+    if port.is_some_and(|p| !is_port(p)) || host.is_empty() {
+        return false;
+    }
+    let valid_chars = host
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '-' | '.' | '_'));
+    if !valid_chars || host.starts_with('.') || host.ends_with('.') || host.contains("..") {
+        return false;
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let Some((_, last)) = host.rsplit_once('.') else {
+        return false;
+    };
+    let ip = host
+        .split('.')
+        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    let tld = last.chars().all(char::is_alphabetic)
+        && last.chars().count() >= 2
+        // `film.mkv` or `list.m3u` is a file name, not a host.
+        && !(MEDIA_EXT.contains(&last.to_lowercase().as_str())
+            || matches!(last.to_lowercase().as_str(), "m3u" | "m3u8" | "pls"));
+    ip || tld
+}
+
+fn is_port(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 5 && text.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Turns what was typed or pasted into the network dialog into a link to open, or `None` when
+/// it is not a network link.
+///
+/// Surrounding whitespace, quotes and angle brackets are dropped; a link pasted after the
+/// field's `https://` replaces it; a scheme is lower-cased; `//host/path` and a bare
+/// `host/path` get `https://`. Local paths are never turned into links.
+pub fn normalize_url_input(input: &str) -> Option<String> {
+    let mut text = input.trim();
+    for (open, close) in [('<', '>'), ('"', '"'), ('\'', '\'')] {
+        if text.len() >= 2 && text.starts_with(open) && text.ends_with(close) {
+            text = text[1..text.len() - 1].trim();
+        }
+    }
+    let collapsed = strip_doubled_scheme(text);
+    let text = collapsed.as_deref().unwrap_or(text);
+    if text.is_empty() || text.chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    let link = if let Some((scheme, rest)) = split_scheme(text) {
+        // The prefix with a path pasted after it (`https:///home/me/a.mkv`, `https://C:\a.mkv`).
+        if looks_like_local_path(rest) || (rest.starts_with('/') && !rest.starts_with("//")) {
+            return None;
+        }
+        // `https://` followed by a pasted `//host/path`.
+        let rest = match rest.strip_prefix("//") {
+            Some(host) if !host.starts_with('/') => host,
+            _ => rest,
+        };
+        format!("{}://{rest}", scheme.to_ascii_lowercase())
+    } else if let Some(rest) = text.strip_prefix("//") {
+        if !starts_with_host(rest) {
+            return None;
+        }
+        format!("{URL_PREFIX}{rest}")
+    } else {
+        if looks_like_local_path(text) || !starts_with_host(text) {
+            return None;
+        }
+        format!("{URL_PREFIX}{text}")
+    };
+    is_network_url(&link).then_some(link)
+}
+
 pub fn is_web(source: &str) -> bool {
     let lower = source.to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
@@ -724,6 +868,189 @@ impl Drop for Streams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_links_without_a_scheme_get_https() {
+        let n = |s: &str| normalize_url_input(s);
+        assert_eq!(
+            n("twitch.tv/caedrel").as_deref(),
+            Some("https://twitch.tv/caedrel")
+        );
+        assert_eq!(
+            n("www.youtube.com/watch?v=dQw4w9WgXcQ").as_deref(),
+            Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        );
+        assert_eq!(n("kick.com/xqc").as_deref(), Some("https://kick.com/xqc"));
+        assert_eq!(n("youtu.be/abc").as_deref(), Some("https://youtu.be/abc"));
+        assert_eq!(n("twitch.tv").as_deref(), Some("https://twitch.tv"));
+        assert_eq!(
+            n("localhost:8080/live.m3u8").as_deref(),
+            Some("https://localhost:8080/live.m3u8")
+        );
+        assert_eq!(
+            n("192.168.1.20:8554/cam").as_deref(),
+            Some("https://192.168.1.20:8554/cam")
+        );
+        assert_eq!(
+            n("user@example.com/video.mp4").as_deref(),
+            Some("https://user@example.com/video.mp4")
+        );
+        assert_eq!(n("[::1]:8080/a").as_deref(), Some("https://[::1]:8080/a"));
+        assert_eq!(
+            n("//cdn.example.com/a.mp4").as_deref(),
+            Some("https://cdn.example.com/a.mp4")
+        );
+    }
+
+    #[test]
+    fn the_prefilled_prefix_is_used_as_is_or_replaced() {
+        let n = |s: &str| normalize_url_input(s);
+        // Typed after the prefix.
+        assert_eq!(
+            n("https://twitch.tv/caedrel").as_deref(),
+            Some("https://twitch.tv/caedrel")
+        );
+        // A full link pasted after the prefix replaces it, never `https://https://`.
+        for pasted in [
+            "https://https://twitch.tv/caedrel",
+            "https://HTTPS://twitch.tv/caedrel",
+            "https:// https://twitch.tv/caedrel",
+            "HTTPS://https://twitch.tv/caedrel",
+            "https://https://https://twitch.tv/caedrel",
+        ] {
+            assert_eq!(
+                n(pasted).as_deref(),
+                Some("https://twitch.tv/caedrel"),
+                "{pasted}"
+            );
+        }
+        assert_eq!(
+            n("https://http://example.com/a.mp4").as_deref(),
+            Some("http://example.com/a.mp4"),
+            "a pasted http link keeps its scheme"
+        );
+        assert_eq!(
+            n("https://rtmp://live.example.com/app/key").as_deref(),
+            Some("rtmp://live.example.com/app/key")
+        );
+        assert_eq!(
+            n("https:////cdn.example.com/a.mp4").as_deref(),
+            Some("https://cdn.example.com/a.mp4"),
+            "a protocol-relative link pasted after the prefix"
+        );
+        // Just the prefix, or prefixes with nothing after them.
+        assert_eq!(n("https://"), None);
+        assert_eq!(n("https://https://"), None);
+        assert_eq!(n("  https://  "), None);
+    }
+
+    #[test]
+    fn schemes_are_lowercased_and_whitespace_and_wrapping_dropped() {
+        let n = |s: &str| normalize_url_input(s);
+        assert_eq!(
+            n("HTTPS://Twitch.tv/Caedrel").as_deref(),
+            Some("https://Twitch.tv/Caedrel"),
+            "only the scheme changes case"
+        );
+        assert_eq!(
+            n("  RTSP://cam/stream \n").as_deref(),
+            Some("rtsp://cam/stream")
+        );
+        assert_eq!(
+            n("\ttwitch.tv/caedrel  ").as_deref(),
+            Some("https://twitch.tv/caedrel")
+        );
+        assert_eq!(
+            n("<https://example.com/a>").as_deref(),
+            Some("https://example.com/a")
+        );
+        assert_eq!(
+            n("\"twitch.tv/caedrel\"").as_deref(),
+            Some("https://twitch.tv/caedrel")
+        );
+        assert_eq!(n("udp://@:1234").as_deref(), Some("udp://@:1234"));
+        assert_eq!(
+            n("rtp://239.0.0.1:5004").as_deref(),
+            Some("rtp://239.0.0.1:5004")
+        );
+        assert_eq!(
+            n("https://myserver/stream").as_deref(),
+            Some("https://myserver/stream"),
+            "an explicit scheme trusts a dotless host"
+        );
+    }
+
+    #[test]
+    fn local_paths_and_other_text_are_never_made_into_links() {
+        for text in [
+            "",
+            "   ",
+            "caedrel",
+            "hello world",
+            "twitch.tv/some user",
+            "/home/me/Videos/a:b.mkv",
+            "~/Videos/film.mkv",
+            "./film.mkv",
+            "../film.mkv",
+            "C:\\Videos\\film.mkv",
+            "C:/Videos/film.mkv",
+            "\\\\server\\share\\film.mkv",
+            "film.mkv",
+            "list.m3u8",
+            "file:///home/me/film.mkv",
+            "ftp://example.com/a.mp4",
+            "smb://nas/film.mkv",
+            "mailto:me@example.com",
+            "magnet:?xt=urn:btih:abc",
+            "javascript:alert(1)",
+            "htp://nope",
+            "example.com:abc/x",
+            "https:///home/me/film.mkv",
+            "https://C:\\Videos\\film.mkv",
+            "https://~/film.mkv",
+            ".example.com",
+            "example..com",
+        ] {
+            assert_eq!(normalize_url_input(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_doubled_prefix_is_dropped_while_typing() {
+        assert_eq!(
+            strip_doubled_scheme("https://https://twitch.tv/x").as_deref(),
+            Some("https://twitch.tv/x")
+        );
+        assert_eq!(
+            strip_doubled_scheme("https://rtsp://cam").as_deref(),
+            Some("rtsp://cam")
+        );
+        assert_eq!(strip_doubled_scheme("https://twitch.tv/x"), None);
+        assert_eq!(strip_doubled_scheme("https://"), None);
+        assert_eq!(
+            strip_doubled_scheme("rtmp://https://x"),
+            None,
+            "only the http prefix is ours to drop"
+        );
+    }
+
+    #[test]
+    fn local_paths_are_recognised() {
+        for path in [
+            "/a/b.mkv",
+            "~/a.mkv",
+            "C:\\a.mkv",
+            "d:/a.mkv",
+            "\\\\nas\\a.mkv",
+            "./a",
+            "../a",
+        ] {
+            assert!(looks_like_local_path(path), "{path}");
+        }
+        for text in ["twitch.tv/x", "//host/a", "https://x", "C:", "a:b"] {
+            assert!(!looks_like_local_path(text), "{text}");
+        }
+    }
 
     #[test]
     fn the_network_dialog_accepts_streaming_links_only() {
