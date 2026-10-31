@@ -61,6 +61,7 @@ impl Frontend {
         };
         let mut open = true;
         let mut submit = false;
+        let mut cancel = false;
         window("Open network stream")
             .open(&mut open)
             .show(ctx, |ui| {
@@ -82,7 +83,13 @@ impl Frontend {
                 ui.horizontal(|ui| {
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     submit = theme::primary(ui, "Open", Some(100.0)).clicked() || enter;
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
                 });
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancel = true;
+                }
             });
         if submit {
             if is_network_url(&text) {
@@ -90,7 +97,7 @@ impl Frontend {
                 return;
             }
             rejected = true;
-        } else if !open {
+        } else if !open || cancel {
             return;
         }
         self.url = Some(UrlDialog { text, rejected });
@@ -265,12 +272,17 @@ impl Frontend {
                     section(ui, "Quality");
                     ui.horizontal(|ui| {
                         ui.label("Default quality");
-                        settings_changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(&mut s.stream_quality)
-                                    .desired_width(110.0),
-                            )
-                            .changed();
+                        let field = ui.add(
+                            egui::TextEdit::singleline(&mut s.stream_quality)
+                                .desired_width(110.0)
+                                .hint_text("best"),
+                        );
+                        settings_changed |= field.changed();
+                        // Fill in the default only once editing is over, so the field can be cleared while typing.
+                        if field.lost_focus() && s.stream_quality.trim().is_empty() {
+                            s.stream_quality = "best".to_owned();
+                            settings_changed = true;
+                        }
                         ui.label(theme::muted("best, or a name such as 720p60"));
                     });
                     section(ui, "Live and video sites");
@@ -288,9 +300,6 @@ impl Frontend {
                             .checkbox(&mut s.sponsorblock_intros, "Also skip intros and outros")
                             .changed();
                     });
-                    if s.stream_quality.trim().is_empty() {
-                        s.stream_quality = "best".to_owned();
-                    }
                     section(ui, "Helper tools");
                     let tools = &self.session.streams.tools;
                     tool_status(
@@ -311,7 +320,7 @@ impl Frontend {
                         "Click a shortcut, then press the new keys. Escape cancels.",
                     ));
                     egui::ScrollArea::vertical()
-                        .max_height(330.0)
+                        .max_height((ctx.content_rect().height() - 230.0).clamp(120.0, 330.0))
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             egui::Grid::new("keys")
@@ -389,7 +398,7 @@ impl Frontend {
             ui.add_space(GAP / 2.0);
             let version = self.session.engine.version();
             ui.label(theme::muted(format!(
-                "Lumen Rust {} · {}",
+                "Lumen {} · {}",
                 env!("CARGO_PKG_VERSION"),
                 version
             )));
@@ -435,7 +444,8 @@ impl Frontend {
                         .show(ui, |ui| {
                             for (label, value) in &rows {
                                 ui.label(theme::muted(label));
-                                ui.label(value);
+                                ui.add(egui::Label::new(value).truncate())
+                                    .on_hover_text(value);
                                 ui.end_row();
                             }
                         });

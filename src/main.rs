@@ -33,6 +33,8 @@ fn main() -> Result<()> {
         }
     }
 
+    // Before any window opens, so a missing home folder is reported plainly.
+    let config = Store::default_dir()?;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 680.0])
@@ -48,7 +50,7 @@ fn main() -> Result<()> {
         "Lumen",
         options,
         Box::new(move |cc| {
-            let store = Store::open(Store::default_dir());
+            let store = Store::open(config);
             let engine = Engine::new(Output::Window, store.settings.volume)?;
             let video = Video::new(&engine, cc)?;
             let mut session = Session::new(engine, store);

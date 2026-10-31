@@ -1,6 +1,6 @@
 //! Settings and per-file memory (resume point, tracks, sync offsets, bookmarks).
 //!
-//! Lumen Rust keeps its own profile and never touches the Python version's settings.
+//! Lumen keeps its own profile in its own settings directory.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -179,13 +179,8 @@ impl Store {
         }
     }
 
-    pub fn default_dir() -> PathBuf {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join("lumen-rs")
+    pub fn default_dir() -> anyhow::Result<PathBuf> {
+        crate::platform::config_dir()
     }
 
     fn file_key(source: &str) -> String {
@@ -264,43 +259,52 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
+/// Creates `dir` (0700 on Unix) and tightens it to 0700 if it already exists with looser
+/// permissions. A symlink is left alone rather than changing whatever it points at.
 fn create_private_dir(dir: &Path) {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let _ = fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir);
+        if let Ok(meta) = fs::symlink_metadata(dir)
+            && meta.is_dir()
+            && meta.permissions().mode() & 0o077 != 0
+        {
+            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+        }
     }
     #[cfg(not(unix))]
     let _ = fs::create_dir_all(dir);
 }
 
-/// Writes through a private (0600) temporary file, fsynced before the rename,
-/// so a crash never leaves half a profile.
+/// Writes through a private (0600), freshly created temporary file with a random name,
+/// fsynced before the rename, so a crash never leaves half a profile and a planted
+/// `settings.json.tmp` symlink cannot redirect the write. The rename replaces `path` itself,
+/// never a file a symlink there points at.
 fn write_json<T: Serialize>(path: &Path, value: &T) {
     use std::io::Write;
     let Ok(bytes) = serde_json::to_vec_pretty(value) else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        create_private_dir(parent);
-    }
-    let temp = path.with_extension("json.tmp");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let written = options.open(&temp).and_then(|mut f| {
-        f.write_all(&bytes)?;
-        f.sync_all()
-    });
-    if written.is_err() || fs::rename(&temp, path).is_err() {
-        let _ = fs::remove_file(&temp);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    create_private_dir(parent);
+    let written = tempfile::Builder::new()
+        .prefix(".lumen-")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .and_then(|mut temp| {
+            temp.write_all(&bytes)?;
+            temp.as_file().sync_all()?;
+            temp.persist(path).map_err(|e| e.error)
+        });
+    if let Err(e) = written {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        eprintln!("lumen: could not save {name}: {e}");
     }
 }
 
@@ -383,6 +387,45 @@ mod tests {
         assert_eq!(mode(&dir.join("settings.json")), 0o600);
         assert_eq!(mode(&dir.join("files.json")), 0o600);
         assert_eq!(mode(&dir), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_never_writes_through_planted_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::write(&victim, "untouched").unwrap();
+        let profile = dir.path().join("profile");
+        fs::create_dir(&profile).unwrap();
+        // The old fixed temporary name, and the target itself, both pointing elsewhere.
+        std::os::unix::fs::symlink(&victim, profile.join("settings.json.tmp")).unwrap();
+        std::os::unix::fs::symlink(&victim, profile.join("settings.json")).unwrap();
+        let mut store = Store::open(profile.clone());
+        store.settings.volume = 42;
+        store.save_settings();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched");
+        let saved = fs::symlink_metadata(profile.join("settings.json")).unwrap();
+        assert!(saved.is_file(), "the link is replaced by a real file");
+        assert_eq!(Store::open(profile).settings.volume, 42);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_profile_folder_is_made_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile");
+        fs::create_dir(&profile).unwrap();
+        fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
+        Store::open(profile.clone()).save_settings();
+        let mode = fs::metadata(&profile).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        let leftovers: Vec<_> = fs::read_dir(&profile)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temporary files are left behind");
     }
 
     #[test]

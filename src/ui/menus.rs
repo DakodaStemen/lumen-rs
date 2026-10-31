@@ -1,6 +1,6 @@
 //! The header menus, the right-click menu and the queue's context actions.
 
-use eframe::egui::{self, Button, RichText, Ui};
+use eframe::egui::{self, Button, Ui};
 
 use super::{Frontend, PrefsTab, always_on_top_supported, geometry};
 use crate::clock::clock;
@@ -20,9 +20,22 @@ fn plain(ui: &mut Ui, label: &str) -> bool {
     clicked
 }
 
+/// Longest menu label shown in full; longer track and chapter names get an ellipsis.
+const MENU_LABEL_MAX: usize = 48;
+
+fn shorten(label: &str) -> String {
+    if label.chars().count() <= MENU_LABEL_MAX {
+        return label.to_owned();
+    }
+    let head: String = label.chars().take(MENU_LABEL_MAX - 1).collect();
+    format!("{}…", head.trim_end())
+}
+
 /// An entry that shows whether it is the current choice.
 fn choice(ui: &mut Ui, label: &str, selected: bool) -> bool {
-    let response = ui.add(Button::new(label).selected(selected));
+    let response = ui
+        .add(Button::new(shorten(label)).selected(selected))
+        .on_hover_text(label);
     geometry::note(ui.ctx(), label, response.rect);
     let clicked = response.clicked();
     if clicked {
@@ -255,7 +268,7 @@ impl Frontend {
             }
             for source in &recent {
                 if ui
-                    .add(Button::new(title_of(source)))
+                    .add(Button::new(shorten(&title_of(source))))
                     .on_hover_text(source)
                     .clicked()
                 {
@@ -327,6 +340,6 @@ impl Frontend {
         ui.separator();
         ui.menu_button("Audio & subtitles", |ui| self.audio_menu(ui, ctx));
         ui.menu_button("Video", |ui| self.video_menu(ui, ctx));
-        ui.menu_button(RichText::new("More"), |ui| self.more_menu(ui, ctx));
+        ui.menu_button("More", |ui| self.more_menu(ui, ctx));
     }
 }

@@ -1,23 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.DakodaStemen.Lumen</id>
-  <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
   <name>Lumen</name>
   <summary>A native media player built on libmpv</summary>
-  <description>
-    <p>Lumen plays local files and network streams through libmpv, with an interface written in Rust. It draws video natively on Wayland, keeps a play queue, remembers where you stopped, and opens Twitch and YouTube links through Streamlink and yt-dlp when those are installed.</p>
-  </description>
-  <launchable type="desktop-id">lumen-rs.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">io.github.DakodaStemen.Lumen.desktop</launchable>
+  <description><p>Lumen plays every format libmpv does, with a seek bar preview, chapters, A-B loop, queue and Twitch/YouTube links through Streamlink and yt-dlp.</p></description>
   <url type="homepage">https://github.com/DakodaStemen/lumen-rs</url>
-  <url type="bugtracker">https://github.com/DakodaStemen/lumen-rs/issues</url>
-  <provides>
-    <binary>lumen-rs</binary>
-  </provides>
-  <categories>
-    <category>AudioVideo</category>
-    <category>Video</category>
-    <category>Player</category>
-  </categories>
+  <provides><binary>lumen-rs</binary></provides>
   <content_rating type="oars-1.1"/>
+  <releases><release version="0.3.0" date="2026-01-01"/></releases>
 </component>

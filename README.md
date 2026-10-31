@@ -8,7 +8,7 @@
 
 **Every format. Every frame. In a better light.**
 
-A native media player for Linux, built in Rust on libmpv.
+**A native media player for Linux, Windows and macOS.**
 Lumen uses egui/eframe for the interface and libmpv for playback, so video is drawn
 natively on Wayland instead of through XWayland. It is a single Rust binary with no Qt,
 Python or libVLC runtime.
@@ -105,13 +105,20 @@ output: HDR is shown tone-mapped to SDR because the video framebuffer is 8-bit R
 
 ## Build and run
 
-Linux is the current target. Install a stable Rust toolchain, a C linker, the usual
-X11/Wayland and OpenGL runtime libraries, and mpv's library.
+Lumen builds on Linux, Windows and macOS. Install a stable Rust toolchain, a C linker
+and libmpv's development files, then `cargo run --release -- movie.mkv`.
 
-```sh
-sudo pacman -S mpv            # Arch; Debian and Ubuntu: libmpv-dev
-cargo run --release -- movie.mkv
-```
+| OS | libmpv |
+| --- | --- |
+| Debian, Ubuntu | `sudo apt install libmpv-dev libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev` |
+| Fedora | `sudo dnf install mpv-devel libxkbcommon-devel wayland-devel mesa-libEGL-devel` (full codecs need RPM Fusion's mpv) |
+| Arch | `sudo pacman -S mpv` |
+| macOS | `brew install mpv`, then `export LIBRARY_PATH=$(brew --prefix)/lib` |
+| Windows (MSVC) | `pwsh scripts/windows-libmpv.ps1` downloads libmpv and builds `mpv.lib`; needs `gh` and `7z` on `PATH`. Keep `libmpv-2.dll` beside the exe. |
+
+Settings live in `$XDG_CONFIG_HOME/lumen-rs` (Linux), `~/Library/Application Support/lumen-rs`
+(macOS) or `%APPDATA%\lumen-rs` (Windows). Installers and bundling are covered in
+[packaging/README.md](packaging/README.md).
 
 Streams need two optional programs on the `PATH`. Without them Lumen still plays files and
 direct links, but a Twitch or YouTube page will not open.

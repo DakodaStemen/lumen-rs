@@ -3,7 +3,7 @@
 //! A `Session` owns everything except the window, so it runs the same with or without a UI.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::clock::clock;
@@ -65,6 +65,9 @@ pub struct Session {
     was_started: bool,
     /// Set from the moment a file is loaded until its saved choices are re-applied.
     restore_pending: bool,
+    /// Whether mpv has reported the file from the latest `start` as loaded. Until then its
+    /// properties may still describe the previous file, so nothing is restored onto it.
+    file_loaded: bool,
     last_save: Instant,
     flash: Option<(String, Instant)>,
 }
@@ -86,6 +89,7 @@ impl Session {
             finished: false,
             was_started: false,
             restore_pending: false,
+            file_loaded: false,
             last_save: Instant::now(),
             flash: None,
         }
@@ -203,6 +207,9 @@ impl Session {
             ));
         }
         self.restore_pending = true;
+        // Events from earlier files must not count as this one loading.
+        self.engine.poll_file_loaded();
+        self.file_loaded = false;
         if !self
             .engine
             .load(mrl, start.map(|ms| ms as f64 / 1000.0), paused, audio)
@@ -265,12 +272,15 @@ impl Session {
     /// Call regularly (Lumen does so every 200 ms). Drives resume, autosave and auto-advance.
     pub fn tick(&mut self) {
         self.handle_stream_events();
+        if let Some(loaded) = self.engine.poll_file_loaded() {
+            self.file_loaded = loaded;
+        }
         let state = self.state();
         if state == State::Playing {
             self.was_started = true;
         }
         if matches!(state, State::Playing | State::Paused) {
-            if self.restore_pending && self.position_ms() > 0 {
+            if self.restore_pending && self.file_loaded && self.position_ms() > 0 {
                 self.restore_pending = false;
                 self.restore_file_settings();
             }
@@ -552,11 +562,7 @@ impl Session {
             self.flash("No video to capture");
             return;
         }
-        let folder = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-            .join("Pictures")
-            .join("Lumen");
+        let folder = crate::platform::screenshot_dir();
         let _ = std::fs::create_dir_all(&folder);
         let target = folder.join(format!(
             "{}-{}.png",

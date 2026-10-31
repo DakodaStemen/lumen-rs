@@ -1,11 +1,7 @@
-# Flatpak manifest: UNTESTED DRAFT. It has not been built.
-# Try it with:
+# Flatpak manifest. Build locally with:
 #   flatpak-builder --user --install --force-clean build packaging/flatpak/io.github.DakodaStemen.Lumen.yml
-# Known gaps before it could go to Flathub:
-#   - cargo sources must be vendored (flatpak-cargo-generator.py Cargo.lock > cargo-sources.json)
-#     because the build has no network access;
-#   - libmpv needs its own dependency modules (ffmpeg, libplacebo, libass); see the io.mpv.Mpv manifest;
-#   - the desktop and metainfo IDs are renamed on install to match the app ID.
+# cargo-sources.json is generated: python flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
+# (regenerate whenever Cargo.lock changes). ffmpeg/mpv are built from source (reduced feature set).
 app-id: io.github.DakodaStemen.Lumen
 runtime: org.freedesktop.Platform
 runtime-version: '24.08'
@@ -14,35 +10,84 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/lumen/cargo
+    CARGO_NET_OFFLINE: 'true'
 command: lumen-rs
 finish-args:
   - --share=ipc
   - --share=network
-  - --socket=wayland
   - --socket=fallback-x11
+  - --socket=wayland
   - --socket=pulseaudio
   - --device=dri
   - --filesystem=xdg-videos:ro
   - --filesystem=xdg-music:ro
-  - --own-name=org.mpris.MediaPlayer2.lumen_rs
+  - --filesystem=xdg-pictures
 modules:
+  - name: libass
+    config-opts: [--disable-static]
+    cleanup: [/include, /lib/pkgconfig]
+    sources:
+      - type: archive
+        url: https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.xz
+        sha256: eae425da50f0015c21f7b3a9c7262a910f0218af469e22e2931462fed3c50959
+  - name: ffmpeg
+    config-opts:
+      - --disable-debug
+      - --disable-doc
+      - --disable-static
+      - --disable-programs
+      - --enable-shared
+      - --enable-gpl
+      - --enable-version3
+      - --enable-libass
+      - --enable-libfreetype
+      - --enable-libdav1d
+      - --enable-libopus
+      - --enable-libvorbis
+      - --enable-vaapi
+    cleanup: [/share/ffmpeg/examples]
+    sources:
+      - type: git
+        url: https://github.com/FFmpeg/FFmpeg.git
+        tag: n7.1.1
+  - name: libplacebo
+    buildsystem: meson
+    config-opts: [-Dvulkan=disabled, -Dopengl=enabled, -Dd3d11=disabled, -Ddemos=false, -Dtests=false, -Dlcms=disabled, -Dshaderc=disabled, -Dglslang=disabled]
+    cleanup: [/include, /lib/pkgconfig]
+    sources:
+      - type: git
+        url: https://code.videolan.org/videolan/libplacebo.git
+        tag: v7.349.0
+  - name: libXpresent
+    buildsystem: autotools
+    sources:
+      - type: git
+        url: https://gitlab.freedesktop.org/xorg/lib/libxpresent.git
+        tag: libXpresent-1.0.2
   - name: mpv
     buildsystem: meson
-    config-opts: [-Dlibmpv=true, -Dcplayer=false, -Dlua=disabled]
+    config-opts: [-Dlibmpv=true, -Dcplayer=false, -Dlua=disabled, -Dmanpage-build=disabled, -Dbuild-date=false, -Dalsa=disabled, -Dpulse=enabled, -Dx11=enabled, -Dwayland=enabled, -Dgl=enabled]
+    cleanup: [/include, /lib/pkgconfig]
     sources:
       - type: git
         url: https://github.com/mpv-player/mpv.git
         tag: v0.40.0
-  - name: lumen-rs
+  - name: lumen
     buildsystem: simple
+    build-options:
+      env:
+        RUSTFLAGS: -L native=/app/lib
     build-commands:
-      - cargo build --release --offline
+      - cargo --offline build --release --locked
       - install -Dm755 target/release/lumen-rs /app/bin/lumen-rs
       - install -Dm644 packaging/linux/lumen-rs.desktop /app/share/applications/io.github.DakodaStemen.Lumen.desktop
       - install -Dm644 packaging/linux/lumen-rs.metainfo.xml /app/share/metainfo/io.github.DakodaStemen.Lumen.metainfo.xml
       - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.DakodaStemen.Lumen.png
-      - sed -i 's/^Icon=.*/Icon=io.github.DakodaStemen.Lumen/' /app/share/applications/io.github.DakodaStemen.Lumen.desktop
-      - sed -i 's/lumen-rs.desktop/io.github.DakodaStemen.Lumen.desktop/' /app/share/metainfo/io.github.DakodaStemen.Lumen.metainfo.xml
+      - desktop-file-edit --set-icon=io.github.DakodaStemen.Lumen /app/share/applications/io.github.DakodaStemen.Lumen.desktop || sed -i "s/^Icon=.*/Icon=io.github.DakodaStemen.Lumen/" /app/share/applications/io.github.DakodaStemen.Lumen.desktop
     sources:
       - type: dir
         path: ../..
+        skip: [target, dist, .git, vendor]
+      - cargo-sources.json

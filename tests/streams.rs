@@ -4,6 +4,9 @@
 //! Streamlink failure cases use small fake programs. The relay test uses the real `streamlink`
 //! and is skipped when it is not installed.
 
+// The fake yt-dlp/Streamlink programs are POSIX shell scripts, so these tests run on Unix only.
+#![cfg(unix)]
+
 mod common;
 
 use std::io::{Read, Write};
@@ -239,6 +242,7 @@ fn ytdlp_resolves_separate_video_and_audio_streams() {
 
     let args = std::fs::read_to_string(&log).unwrap();
     for expected in [
+        "--ignore-config",
         "--no-playlist",
         "-f",
         "b/bv*+ba",

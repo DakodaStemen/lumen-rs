@@ -76,7 +76,9 @@ pub fn color_rgb(text: &str) -> Option<[u8; 3]> {
 
 /// The folder user shader files are read from. Lumen bundles none.
 pub fn shader_dir() -> PathBuf {
-    crate::store::Store::default_dir().join("shaders")
+    crate::store::Store::default_dir()
+        .map(|p| p.join("shaders"))
+        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Shader files in `dir`, sorted by name. Only plain files with a shader extension count.
