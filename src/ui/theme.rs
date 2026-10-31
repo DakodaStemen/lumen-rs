@@ -224,6 +224,8 @@ pub fn apply(ctx: &egui::Context, palette: Palette, body: f32) {
         style.spacing.menu_margin = Margin::same(6);
         style.spacing.window_margin = Margin::same(18);
         style.spacing.combo_width = 70.0;
+        // Long paths wrap within the smallest window rather than running off its edge.
+        style.spacing.tooltip_width = 360.0;
         style.spacing.icon_width = 18.0;
         style.spacing.icon_width_inner = 10.0;
         style.spacing.scroll = egui::style::ScrollStyle::floating();
@@ -350,14 +352,26 @@ pub fn pill(ui: &mut Ui, text: &str, primary: bool, width: f32) -> Response {
     let size = Vec2::new(width, BUTTON_HEIGHT + 6.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
-        let base = if primary { p.accent } else { p.button };
+        let down = response.is_pointer_button_down_on();
         let painter = ui.painter();
         let radius = CornerRadius::same((size.y / 2.0) as u8);
-        painter.rect_filled(rect, radius, base);
-        if response.is_pointer_button_down_on() {
-            painter.rect_filled(rect, radius, Color32::from_black_alpha(40));
-        } else if response.hovered() {
-            painter.rect_filled(rect, radius, Color32::from_white_alpha(14));
+        if primary {
+            painter.rect_filled(rect, radius, p.accent);
+            if down {
+                painter.rect_filled(rect, radius, Color32::from_black_alpha(40));
+            } else if response.hovered() {
+                painter.rect_filled(rect, radius, Color32::from_white_alpha(14));
+            }
+        } else {
+            // The scheme's own button shades, so hover shows on a light window too.
+            let fill = if down {
+                p.button_active
+            } else if response.hovered() {
+                p.button_hover
+            } else {
+                p.button
+            };
+            painter.rect_filled(rect, radius, fill);
         }
         let color = if primary { p.on_accent } else { p.text };
         let font = FontId::proportional(ui.style().text_styles[&TextStyle::Button].size);
