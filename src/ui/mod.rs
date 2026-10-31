@@ -11,6 +11,7 @@ mod icons;
 mod menus;
 pub mod picker;
 pub mod theme;
+pub mod window;
 
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -128,6 +129,11 @@ pub struct Frontend {
     body_size: f32,
     /// In a narrow window the queue is hidden until shown for the moment with its button.
     sidebar_peek: bool,
+    /// Whether Lumen draws its own title bar (GNOME on Wayland), and its window buttons.
+    csd: bool,
+    window_buttons: window::ButtonLayout,
+    /// The window edge under the pointer while it can resize the undecorated window.
+    edge: Option<egui::ResizeDirection>,
 }
 
 pub use crate::platform::always_on_top_supported;
@@ -161,6 +167,9 @@ impl Frontend {
             applied: None,
             body_size: theme::body_size(None),
             sidebar_peek: false,
+            csd: window::client_side_decorations(),
+            window_buttons: window::button_layout(),
+            edge: None,
         };
         frontend.sync_theme(ctx);
         frontend
@@ -212,6 +221,7 @@ impl Frontend {
     pub fn show(&mut self, ctx: &egui::Context, surface: &mut dyn Surface) {
         self.sync_theme(ctx);
         self.pump(ctx);
+        self.edge = if self.csd { window::edges(ctx) } else { None };
         let fullscreen = is_fullscreen(ctx);
         if fullscreen || self.is_mini() {
             self.compact_view(ctx, surface, fullscreen);
@@ -258,6 +268,9 @@ impl Frontend {
             }
         }
         self.dialogs(ctx);
+        if self.csd {
+            window::frame(ctx, self.edge);
+        }
         ctx.request_repaint_after(TICK);
     }
 
@@ -595,6 +608,14 @@ impl Frontend {
                     Vec2::new(ui.available_width(), theme::BUTTON_HEIGHT),
                     Sense::hover(),
                 );
+                if self.csd {
+                    window::drag_area(
+                        ui,
+                        ui.max_rect().expand(6.0),
+                        "sidebar_move",
+                        self.edge.is_some(),
+                    );
+                }
                 let mut header = ui.new_child(
                     UiBuilder::new()
                         .max_rect(rect)
@@ -825,12 +846,25 @@ impl Frontend {
             Vec2::new(ui.available_width(), theme::BUTTON_HEIGHT),
             Sense::hover(),
         );
+        if self.csd {
+            // The header bar is the title bar: registered first so its buttons win the pointer.
+            window::drag_area(
+                ui,
+                ui.max_rect().expand(6.0),
+                "toolbar_move",
+                self.edge.is_some(),
+            );
+        }
         let mut left = ui.new_child(
             UiBuilder::new()
                 .max_rect(rect)
                 .layout(Layout::left_to_right(Align::Center)),
         );
         left.spacing_mut().item_spacing.x = 4.0;
+        if self.csd && !self.window_buttons.left.is_empty() {
+            window::buttons(&mut left, &self.window_buttons.left);
+            left.add_space(4.0);
+        }
         let shown = self.sidebar_visible(&ctx);
         if theme::icon_toggle(
             &mut left,
@@ -873,6 +907,11 @@ impl Frontend {
                 .layout(Layout::right_to_left(Align::Center)),
         );
         right.spacing_mut().item_spacing.x = 4.0;
+        if self.csd && !self.window_buttons.right.is_empty() {
+            let outermost_first: Vec<_> = self.window_buttons.right.iter().rev().copied().collect();
+            window::buttons(&mut right, &outermost_first);
+            right.add_space(4.0);
+        }
         let more = theme::menu_icon(
             &mut right,
             Icon::Menu,
@@ -898,7 +937,18 @@ impl Frontend {
     /// Click, double-click, scroll and right-click on the picture.
     fn video_interaction(&mut self, ui: &mut egui::Ui, rect: egui::Rect, compact: bool) {
         let ctx = ui.ctx().clone();
-        let response = ui.interact(rect, ui.id().with("video"), Sense::click());
+        // The mini player has no header bar, so dragging the picture moves the window.
+        let movable = compact && !is_fullscreen(&ctx);
+        let sense = if movable {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        };
+        let response = ui.interact(rect, ui.id().with("video"), sense);
+        if movable && response.drag_started_by(egui::PointerButton::Primary) && self.edge.is_none()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
         if response.double_clicked() {
             self.pending_click = None;
             self.perform(&ctx, Action::Fullscreen);

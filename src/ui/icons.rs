@@ -42,6 +42,9 @@ pub enum Icon {
     AudioFile,
     Delete,
     Add,
+    WindowMinimize,
+    WindowMaximize,
+    WindowRestore,
 }
 
 macro_rules! bundled {
@@ -54,7 +57,7 @@ macro_rules! bundled {
 }
 
 impl Icon {
-    pub const ALL: [Icon; 31] = [
+    pub const ALL: [Icon; 34] = [
         Icon::Play,
         Icon::Pause,
         Icon::Next,
@@ -86,6 +89,9 @@ impl Icon {
         Icon::AudioFile,
         Icon::Delete,
         Icon::Add,
+        Icon::WindowMinimize,
+        Icon::WindowMaximize,
+        Icon::WindowRestore,
     ];
 
     /// The freedesktop icon name, without `-symbolic`, and the bundled Adwaita copy.
@@ -109,6 +115,9 @@ impl Icon {
             Icon::Subtitles => bundled!("media-view-subtitles"),
             Icon::Video => bundled!("video-display"),
             Icon::Close => bundled!("window-close"),
+            Icon::WindowMinimize => bundled!("window-minimize"),
+            Icon::WindowMaximize => bundled!("window-maximize"),
+            Icon::WindowRestore => bundled!("window-restore"),
             Icon::Check => bundled!("object-select"),
             Icon::Error => bundled!("dialog-error"),
             Icon::SidebarShow => bundled!("sidebar-show"),

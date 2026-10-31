@@ -41,6 +41,8 @@ fn main() -> Result<()> {
             .with_min_inner_size([480.0, 320.0])
             .with_title("Lumen")
             .with_app_id("lumen-rs")
+            // On GNOME Wayland the header bar is the title bar; see ui::window.
+            .with_decorations(!lumen_rs::ui::window::client_side_decorations())
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(
                 "../assets/icon.png"
             ))?),

@@ -421,7 +421,7 @@ fn paint_icon_button(ui: &Ui, response: &Response, icon: Icon, lit: bool, round:
 }
 
 /// Names a widget for screen readers and the demo recorder, with `tip` (or the name) as its tooltip.
-fn finish(response: Response, name: &str, tip: &str, selected: Option<bool>) -> Response {
+pub fn finish(response: Response, name: &str, tip: &str, selected: Option<bool>) -> Response {
     super::geometry::note(&response.ctx, name, response.rect);
     let enabled = response.enabled();
     response.widget_info(|| match selected {
