@@ -6,7 +6,12 @@ env:
   APT_DEPS: libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev ffmpeg streamlink
 jobs:
   check:
-    runs-on: ubuntu-latest
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -14,9 +19,23 @@ jobs:
           toolchain: 1.99.1
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - run: sudo apt-get update && sudo apt-get install -y $APT_DEPS
-      - name: Log mpv version
-        run: pkg-config --modversion mpv
+      - name: Install libmpv and ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $APT_DEPS
+      - name: Install libmpv and ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv ffmpeg
+          echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+      - name: Install libmpv and ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          choco install ffmpeg -y --no-progress
+          ./scripts/windows-libmpv.ps1
       - run: rustc --version && cargo --version
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings

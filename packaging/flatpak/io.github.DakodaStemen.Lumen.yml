@@ -1,0 +1,46 @@
+# Flatpak manifest (UNTESTED draft). Build locally with:
+#   flatpak-builder --user --install --force-clean build packaging/flatpak/io.github.DakodaStemen.Lumen.yml
+# Flathub needs vendored cargo sources (flatpak-cargo-generator.py Cargo.lock > cargo-sources.json).
+app-id: io.github.DakodaStemen.Lumen
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/lumen/cargo
+command: lumen-rs
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=xdg-videos:ro
+  - --filesystem=xdg-music:ro
+  - --filesystem=xdg-pictures
+modules:
+  - name: libplacebo-and-mpv-deps
+    buildsystem: simple
+    build-commands: []   # TODO: add ffmpeg-full, libplacebo, libass, lcms2, luajit modules (see Flathub io.mpv.Mpv)
+  - name: mpv
+    buildsystem: meson
+    config-opts: [-Dlibmpv=true, -Dcplayer=false, -Dlua=disabled]
+    sources:
+      - type: git
+        url: https://github.com/mpv-player/mpv.git
+        tag: v0.40.0
+  - name: lumen
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --locked
+      - install -Dm755 target/release/lumen-rs /app/bin/lumen-rs
+      - install -Dm644 packaging/linux/lumen-rs.desktop /app/share/applications/io.github.DakodaStemen.Lumen.desktop
+      - install -Dm644 packaging/linux/lumen-rs.metainfo.xml /app/share/metainfo/io.github.DakodaStemen.Lumen.metainfo.xml
+      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.DakodaStemen.Lumen.png
+    sources:
+      - type: dir
+        path: ../..

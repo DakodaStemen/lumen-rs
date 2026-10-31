@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lumen
+GenericName=Media Player
+Comment=A native media player built on libmpv
+Exec=lumen-rs %U
+Icon=lumen-rs
+Terminal=false
+Categories=AudioVideo;Audio;Video;Player;
+StartupWMClass=lumen-rs
+MimeType=video/mp4;video/x-matroska;video/webm;video/x-msvideo;video/quicktime;video/x-m4v;video/x-ms-wmv;video/x-flv;video/mp2t;video/mpeg;video/ogg;video/3gpp;audio/mpeg;audio/flac;audio/x-wav;audio/ogg;audio/opus;audio/mp4;audio/aac;audio/x-ms-wma;audio/x-ape;
