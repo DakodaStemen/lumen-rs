@@ -18,8 +18,10 @@ pub struct App {
 
 impl App {
     pub fn new(session: Session, video: Video, ctx: &egui::Context) -> Self {
+        let mut frontend = Frontend::new(session, ctx);
+        frontend.follow_desktop(ctx);
         Self {
-            frontend: Frontend::new(session, ctx),
+            frontend,
             video: Arc::new(Mutex::new(Some(video))),
             media_keys: MediaKeys::spawn(),
         }

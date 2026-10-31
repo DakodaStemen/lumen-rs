@@ -68,11 +68,13 @@ flowchart LR
 - Seek bar, frame stepping in both directions, chapters, A-B loop, speed from 0.25× to 4×,
   and volume up to 200%.
 - Audio and subtitle track switching, and audio and subtitle delay in 50 ms steps.
-- Screenshots, fullscreen with auto-hiding controls, and a status line.
-- Lumen's own layout: a sidebar with **Open media**, **Network stream** and a filterable queue
-  (right-click for play, copy location and remove; **Save queue** writes an M3U), a "Now playing"
-  header with **Audio & subtitles**, **Video** and **…** menus, and a welcome screen with your
-  recent files. The same menus open on right-click over the picture.
+- Screenshots, and fullscreen with auto-hiding controls.
+- A plain layout that follows the desktop: light or dark, the accent colour and the interface
+  font come from the system (the freedesktop portal or GNOME settings on Linux), and the window
+  keeps the system title bar. A toolbar has **Open…**, **Open link…** and the **Audio &
+  subtitles**, **Video** and main (☰) menus; the sidebar holds a filterable queue (right-click for
+  play, copy location and remove; **Save queue** writes an M3U); the welcome page lists recent
+  files. The same menus open on right-click over the picture.
 - A seek bar with a time (and chapter name) under the pointer, chapter ticks and the A-B loop
   shown on it; click the picture to pause, double-click for fullscreen, scroll for volume.
 - Native file pickers for media and subtitle files, drag and drop with a drop hint, and
@@ -87,7 +89,9 @@ flowchart LR
   sites that serve video and audio separately.
 - [SponsorBlock](https://sponsor.ajay.app): sponsor reads, self-promotion and subscribe
   reminders in YouTube videos are skipped (intros and outros optionally).
-- An "Open network stream" dialog (Ctrl+L) for HTTP, HTTPS, RTSP, RTMP, UDP and RTP links.
+- An "Open network stream" dialog (Ctrl+L) for HTTP, HTTPS, RTSP, RTMP, UDP and RTP links. The
+  field starts with `https://`, so `twitch.tv/name` is enough; a full link pasted over or after it
+  replaces the prefix.
 - Quality defaults (`profile=gpu-hq`), a hardware-decoding picker and a tone-mapping choice, under
   **Preferences → Picture & sound**, together with subtitle style, picture controls, night mode,
   ReplayGain and the audio output device.

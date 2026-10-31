@@ -23,6 +23,9 @@ ureq = "3"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 eframe = { version = "0.33", default-features = false, features = ["x11", "wayland"] }
+# Reads the desktop's light/dark and accent settings from the freedesktop portal. Already in the
+# tree through souvlaki's MPRIS backend, so it adds no new crates.
+zbus = "5"
 
 [dev-dependencies]
 egui_kittest = "0.33"

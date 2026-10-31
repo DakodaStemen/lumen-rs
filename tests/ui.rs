@@ -85,13 +85,13 @@ fn pass_time(h: &mut Harness<'static, Ui>, ms: u64) {
 fn an_empty_player_invites_you_to_open_something() {
     let Some(_fx) = fixture() else { return };
     let h = harness(quiet_session());
-    h.get_by_label("Welcome");
     h.get_by_label("Drop media here");
-    h.get_by_label("Open something to begin");
-    // One in the sidebar, one over the picture.
-    assert_eq!(h.get_all_by_label("+   Open media").count(), 2);
-    h.get_by_label("↗   Network stream");
+    h.get_by_label("Or open a file or a link.");
+    // One in the toolbar, one on the welcome page.
+    assert_eq!(h.get_all_by_label("Open…").count(), 2);
+    assert_eq!(h.get_all_by_label("Open link…").count(), 2);
     assert!(h.query_by_label("Nothing queued yet.").is_some());
+    h.get_by_label("0 items");
 }
 
 #[test]
@@ -116,10 +116,11 @@ fn saving_and_clearing_need_something_in_the_queue() {
 fn the_network_dialog_rejects_bad_links_and_opens_good_ones() {
     let Some(_fx) = fixture() else { return };
     let mut h = harness(quiet_session());
-    h.get_by_label("↗   Network stream").click();
+    first(&h, "Open link…").click();
     settle(&mut h);
     h.get_by_label("Open network stream");
 
+    // The field starts with https://, and a whole link typed after it replaces it.
     let field = h
         .get_all_by_role(egui::accesskit::Role::TextInput)
         .last()
@@ -151,6 +152,57 @@ fn the_network_dialog_rejects_bad_links_and_opens_good_ones() {
     assert!(front.session.queue.items[0].source.ends_with("/video.mp4"));
 }
 
+/// Opens the network dialog, types `typed` into its prefilled field and submits it.
+fn submit_link(h: &mut Harness<'static, Ui>, typed: &str) {
+    h.key_press_modifiers(Modifiers::CTRL, Key::L);
+    settle(h);
+    let field = h
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .last()
+        .unwrap();
+    field.focus();
+    field.type_text(typed);
+    settle(h);
+    h.get_by_label("Open").click();
+    settle(h);
+}
+
+#[test]
+fn links_typed_without_https_or_pasted_over_the_prefix_open_once() {
+    let Some(_fx) = fixture() else { return };
+    let mut h = harness(quiet_session());
+    h.key_press_modifiers(Modifiers::CTRL, Key::L);
+    settle(&mut h);
+    assert_eq!(
+        h.state_mut().front().url.as_ref().map(|u| u.text.as_str()),
+        Some("https://"),
+        "the field starts with the scheme filled in"
+    );
+    h.key_press(Key::Escape);
+    settle(&mut h);
+
+    // Typed after the prefix.
+    submit_link(&mut h, "127.0.0.1:9/typed.mp4");
+    // A full link pasted after the prefix.
+    submit_link(&mut h, "http://127.0.0.1:9/pasted.mp4");
+    let sources: Vec<String> = h
+        .state_mut()
+        .front()
+        .session
+        .queue
+        .items
+        .iter()
+        .map(|i| i.source.clone())
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            "https://127.0.0.1:9/typed.mp4",
+            "http://127.0.0.1:9/pasted.mp4"
+        ]
+    );
+}
+
 #[test]
 fn escape_closes_the_network_dialog() {
     let Some(_fx) = fixture() else { return };
@@ -177,7 +229,7 @@ fn the_queue_filter_narrows_the_list() {
     settle(&mut h);
     first(&h, "ep1.mp4");
     first(&h, "film.mp4");
-    h.get_by_label("PLAY QUEUE  ·  3");
+    h.get_by_label("3 items");
 
     let filter = h
         .get_all_by_role(egui::accesskit::Role::TextInput)
@@ -271,7 +323,6 @@ fn the_play_button_and_space_both_pause() {
         == State::Playing
         && s.position_ms() > 0));
     settle(&mut h);
-    h.get_by_label("Now playing");
     first(&h, "film.mp4");
 
     h.get_by_label("Pause").click();
@@ -440,7 +491,7 @@ fn the_more_menu_opens_preferences_and_media_information() {
         == State::Playing));
     settle(&mut h);
 
-    h.get_by_label("…").click();
+    h.get_by_label("Main menu").click();
     settle(&mut h);
     h.get_by_label("Media information").click();
     settle(&mut h);
@@ -449,7 +500,7 @@ fn the_more_menu_opens_preferences_and_media_information() {
     h.get_by_label("Resolution");
     h.get_by_label("320 × 180");
 
-    h.get_by_label("…").click();
+    h.get_by_label("Main menu").click();
     settle(&mut h);
     h.get_by_label("Keyboard shortcuts").click();
     settle(&mut h);
@@ -524,34 +575,38 @@ fn the_mini_player_opens_and_closes_with_its_shortcut() {
     assert!(wait(&mut h.state_mut().front().session, 8, |s| s.state()
         == State::Playing));
     settle(&mut h);
-    assert!(h.query_by_label("Now playing").is_some());
+    assert!(h.query_by_label("Open…").is_some());
 
     h.key_press_modifiers(Modifiers::CTRL, Key::M);
     settle(&mut h);
     assert!(h.state_mut().front().is_mini());
     assert!(
-        h.query_by_label("PLAY QUEUE  ·  1").is_none(),
+        h.query_by_label("1 item").is_none(),
         "the sidebar steps aside"
+    );
+    assert!(
+        h.query_by_label("Open…").is_none(),
+        "and so does the toolbar"
     );
 
     h.key_press_modifiers(Modifiers::CTRL, Key::M);
     settle(&mut h);
     assert!(!h.state_mut().front().is_mini());
-    h.get_by_label("Now playing");
+    h.get_by_label("Open…");
 }
 
 #[test]
 fn the_queue_toggle_hides_and_shows_the_sidebar() {
     let Some(_fx) = fixture() else { return };
     let mut h = harness(quiet_session());
-    h.get_by_label("PLAY QUEUE  ·  0");
+    h.get_by_label("0 items");
     h.key_press(Key::Q);
     settle(&mut h);
-    assert!(h.query_by_label("PLAY QUEUE  ·  0").is_none());
+    assert!(h.query_by_label("0 items").is_none());
     assert!(!h.state_mut().front().session.store.settings.show_queue);
     h.key_press(Key::Q);
     settle(&mut h);
-    h.get_by_label("PLAY QUEUE  ·  0");
+    h.get_by_label("0 items");
 }
 
 #[test]
@@ -591,7 +646,7 @@ fn the_layout_survives_odd_window_sizes_and_states() {
         );
         let mut h = harness_sized(s, size);
         pass_time(&mut h, 100);
-        h.get_by_label("Welcome");
+        h.get_by_label("Ready when you are");
         h.state_mut().front().session.play_index(0, None, false);
         pass_time(&mut h, 300);
         h.state_mut()
@@ -666,7 +721,7 @@ fn the_widgets_the_demo_recorder_aims_at_report_where_they_are() {
     }
     h.key_press(Key::Escape);
     settle(&mut h);
-    h.get_by_label("…").click();
+    h.get_by_label("Main menu").click();
     settle(&mut h);
     for name in ["Preferences…", "Media information", "Keyboard shortcuts"] {
         assert!(

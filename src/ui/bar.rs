@@ -28,35 +28,6 @@ pub fn value_at(x: f32, rect: Rect) -> f32 {
     ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0)
 }
 
-/// Fills `rect` with a mint-to-blue gradient; the gradient spans the whole played stretch.
-fn fill_gradient(painter: &egui::Painter, rect: Rect, round: CornerRadius, dim: f32) {
-    let steps = ((rect.width() / 3.0).ceil() as usize).clamp(1, 96);
-    let mint = theme::MINT.gamma_multiply(dim);
-    let blue = theme::BLUE.gamma_multiply(dim);
-    if steps == 1 || rect.width() < 12.0 {
-        painter.rect_filled(rect, round, mint);
-        return;
-    }
-    let w = rect.width() / steps as f32;
-    for i in 0..steps {
-        let t = i as f32 / (steps - 1) as f32;
-        let seg = Rect::from_min_max(
-            Pos2::new(rect.left() + w * i as f32, rect.top()),
-            Pos2::new(
-                (rect.left() + w * (i + 1) as f32 + 0.5).min(rect.right()),
-                rect.bottom(),
-            ),
-        );
-        let r = CornerRadius {
-            nw: if i == 0 { round.nw } else { 0 },
-            sw: if i == 0 { round.sw } else { 0 },
-            ne: if i == steps - 1 { round.ne } else { 0 },
-            se: if i == steps - 1 { round.se } else { 0 },
-        };
-        painter.rect_filled(seg, r, mint.lerp_to_gamma(blue, t));
-    }
-}
-
 pub fn show(ui: &mut Ui, size: Vec2, bar: &Bar) -> BarOutput {
     let sense = if bar.enabled {
         Sense::click_and_drag()
@@ -85,29 +56,35 @@ pub fn show(ui: &mut Ui, size: Vec2, bar: &Bar) -> BarOutput {
     let released = bar.enabled && (response.drag_stopped() || response.clicked());
 
     if ui.is_rect_visible(rect) {
+        let p = theme::palette(ui.ctx());
         let painter = ui.painter();
         let x = |v: f32| track_rect.left() + v.clamp(0.0, 1.0) * track_rect.width();
         let round = CornerRadius::same((thickness / 2.0).ceil() as u8);
-        painter.rect_filled(track_rect, round, theme::TRACK);
+        painter.rect_filled(track_rect, round, p.track);
 
         if let Some((a, b)) = bar.band {
             let band = Rect::from_min_max(
                 Pos2::new(x(a), track_rect.top() - 2.0),
                 Pos2::new(x(b).max(x(a) + 2.0), track_rect.bottom() + 2.0),
             );
-            painter.rect_filled(
-                band,
-                CornerRadius::same(2),
-                theme::WARN.gamma_multiply(0.35),
-            );
+            painter.rect_filled(band, CornerRadius::same(2), p.warning.gamma_multiply(0.4));
         }
         let shown = bar.value.clamp(0.0, 1.0);
-        let dim = if bar.enabled { 1.0 } else { 0.4 };
+        let fill = if bar.enabled {
+            p.accent
+        } else {
+            p.dim.gamma_multiply(0.5)
+        };
         let played = Rect::from_min_max(track_rect.min, Pos2::new(x(shown), track_rect.max.y));
         if played.width() > 0.5 {
-            fill_gradient(painter, played, round, dim);
+            painter.rect_filled(played, round, fill);
         }
 
+        let tick = if p.dark() {
+            Color32::from_white_alpha(90)
+        } else {
+            Color32::from_black_alpha(90)
+        };
         for &marker in bar.markers {
             let at = x(marker);
             painter.line_segment(
@@ -115,17 +92,23 @@ pub fn show(ui: &mut Ui, size: Vec2, bar: &Bar) -> BarOutput {
                     Pos2::new(at, track_rect.top() - 1.0),
                     Pos2::new(at, track_rect.bottom() + 1.0),
                 ],
-                egui::Stroke::new(1.0_f32, Color32::from_white_alpha(70)),
+                egui::Stroke::new(1.0_f32, tick),
             );
         }
         if bar.enabled && active {
-            painter.circle_filled(Pos2::new(x(shown), rect.center().y), 6.5, theme::HANDLE);
+            let centre = Pos2::new(x(shown), rect.center().y);
+            painter.circle_filled(
+                centre + Vec2::new(0.0, 1.0),
+                7.5,
+                Color32::from_black_alpha(50),
+            );
+            painter.circle_filled(centre, 7.0, Color32::WHITE);
         }
         if response.has_focus() {
             painter.rect_stroke(
                 rect.shrink(1.0),
                 CornerRadius::same(theme::RADIUS),
-                egui::Stroke::new(1.0_f32, theme::MINT.gamma_multiply(0.7)),
+                egui::Stroke::new(2.0_f32, p.accent.gamma_multiply(0.6)),
                 egui::StrokeKind::Inside,
             );
         }

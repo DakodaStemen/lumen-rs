@@ -3,6 +3,7 @@
 //! Everything here draws through a [`Surface`], so the whole interface can be built and
 //! clicked through in tests without a GPU or a video.
 
+pub mod appearance;
 mod bar;
 mod dialogs;
 pub mod geometry;
@@ -10,6 +11,7 @@ mod menus;
 pub mod picker;
 pub mod theme;
 
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
@@ -21,6 +23,8 @@ use crate::clock::clock;
 use crate::engine::Chapter;
 use crate::keys::{self, Action, Binding, Keymap, binding_text};
 use crate::session::{RATES, Session, State};
+use crate::streams::Activity;
+use appearance::Appearance;
 use bar::Bar;
 use picker::{Picked, Picker};
 
@@ -29,8 +33,6 @@ const TICK: Duration = Duration::from_millis(200);
 const CHROME_HIDE: Duration = Duration::from_secs(2);
 /// A single click waits this long for a second one before it toggles pause.
 const DOUBLE_CLICK: Duration = Duration::from_millis(280);
-/// Height of the status line, seek bar and transport row under the video.
-const CONTROLS_HEIGHT: f32 = 132.0;
 const SIDEBAR_WIDTH: f32 = 248.0;
 /// The one spacing unit between groups of controls.
 const GAP: f32 = 12.0;
@@ -55,6 +57,25 @@ impl Surface for NullSurface {
 pub struct UrlDialog {
     pub text: String,
     pub rejected: bool,
+    /// Set until the field has been focused once, so the cursor can start after the prefix.
+    pub fresh: bool,
+}
+
+impl UrlDialog {
+    /// A dialog whose field starts with `https://`, so a bare `twitch.tv/name` needs nothing more.
+    pub fn new() -> Self {
+        Self {
+            text: crate::streams::URL_PREFIX.to_owned(),
+            rejected: false,
+            fresh: true,
+        }
+    }
+}
+
+impl Default for UrlDialog {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,25 +114,21 @@ pub struct Frontend {
     pending_click: Option<Instant>,
     scroll: f32,
     dropping: bool,
-    brand: Option<egui::TextureHandle>,
+    /// What the desktop asks for, and where its changes arrive.
+    appearance: Appearance,
+    appearance_changes: Option<Receiver<Appearance>>,
+    /// The palette last applied, so the theme is only rebuilt when something changed.
+    applied: Option<theme::Palette>,
+    body_size: f32,
 }
 
 pub use crate::platform::always_on_top_supported;
 
 impl Frontend {
+    /// A frontend with the default dark look and egui's fonts; see [`Frontend::follow_desktop`].
     pub fn new(session: Session, ctx: &egui::Context) -> Self {
-        theme::apply(ctx);
         let keymap = Keymap::from_settings(&session.store.settings.keys);
-        let brand = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/mark.png"))
-            .ok()
-            .map(|icon| {
-                let image = egui::ColorImage::from_rgba_unmultiplied(
-                    [icon.width as usize, icon.height as usize],
-                    &icon.rgba,
-                );
-                ctx.load_texture("brand", image, egui::TextureOptions::LINEAR)
-            });
-        Self {
+        let mut frontend = Self {
             session,
             picker: Picker::default(),
             keymap,
@@ -130,7 +147,42 @@ impl Frontend {
             pending_click: None,
             scroll: 0.0,
             dropping: false,
-            brand,
+            appearance: Appearance::default(),
+            appearance_changes: None,
+            applied: None,
+            body_size: theme::body_size(None),
+        };
+        frontend.sync_theme(ctx);
+        frontend
+    }
+
+    /// Takes the desktop's fonts, light or dark preference and accent colour, and keeps
+    /// following the preference and accent as they change.
+    pub fn follow_desktop(&mut self, ctx: &egui::Context) {
+        self.body_size = theme::install_fonts(ctx, &appearance::system_fonts());
+        self.appearance = Appearance::detect();
+        self.appearance_changes = appearance::watch(ctx);
+        self.applied = None;
+        self.sync_theme(ctx);
+    }
+
+    /// Uses `appearance` instead of what the desktop says, until it next changes.
+    pub fn set_appearance(&mut self, ctx: &egui::Context, appearance: Appearance) {
+        self.appearance = appearance;
+        self.sync_theme(ctx);
+    }
+
+    /// Rebuilds the theme when the scheme or accent changed.
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.appearance_changes
+            && let Some(latest) = rx.try_iter().last()
+        {
+            self.appearance = latest;
+        }
+        let palette = theme::Palette::new(self.appearance.resolve(ctx), self.appearance.accent());
+        if self.applied != Some(palette) {
+            theme::apply(ctx, palette, self.body_size);
+            self.applied = Some(palette);
         }
     }
 
@@ -148,29 +200,48 @@ impl Frontend {
 
     /// Draws one frame.
     pub fn show(&mut self, ctx: &egui::Context, surface: &mut dyn Surface) {
+        self.sync_theme(ctx);
         self.pump(ctx);
         let fullscreen = is_fullscreen(ctx);
         if fullscreen || self.is_mini() {
             self.compact_view(ctx, surface, fullscreen);
         } else {
+            let p = theme::palette(ctx);
             if self.session.store.settings.show_queue {
                 egui::SidePanel::left("sidebar")
                     .exact_width(SIDEBAR_WIDTH)
                     .resizable(false)
+                    .show_separator_line(true)
                     .frame(
                         egui::Frame::new()
-                            .fill(theme::SIDEBAR)
-                            .inner_margin(Margin::same(GAP as i8)),
+                            .fill(p.sidebar)
+                            .inner_margin(Margin::symmetric(8, 8)),
                     )
                     .show(ctx, |ui| self.sidebar(ui));
             }
-            egui::CentralPanel::default()
+            egui::TopBottomPanel::top("toolbar")
+                .show_separator_line(false)
                 .frame(
                     egui::Frame::new()
-                        .fill(theme::BG)
-                        .inner_margin(Margin::same(GAP as i8 * 2)),
+                        .fill(p.window)
+                        .inner_margin(Margin::symmetric(8, 6)),
                 )
-                .show(ctx, |ui| self.main_view(ui, surface));
+                .show(ctx, |ui| self.toolbar(ui));
+            egui::TopBottomPanel::bottom("controls")
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(p.window).inner_margin(Margin {
+                    left: 10,
+                    right: 10,
+                    top: 4,
+                    bottom: 8,
+                }))
+                .show(ctx, |ui| {
+                    self.seek_row(ui);
+                    self.transport_row(ui);
+                });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(p.window))
+                .show(ctx, |ui| self.video_view(ui, surface));
         }
         self.dialogs(ctx);
         ctx.request_repaint_after(TICK);
@@ -370,12 +441,7 @@ impl Frontend {
             Action::Open => self
                 .picker
                 .open_media(ctx, &self.session.store.settings.last_dir),
-            Action::OpenUrl => {
-                self.url = Some(UrlDialog {
-                    text: String::new(),
-                    rejected: false,
-                })
-            }
+            Action::OpenUrl => self.url = Some(UrlDialog::new()),
             Action::Preferences => self.open_prefs(PrefsTab::Playback),
             Action::Fullscreen => {
                 if self.is_mini() {
@@ -454,63 +520,51 @@ impl Frontend {
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.spacing_mut().item_spacing.y = GAP;
-        if theme::primary(ui, "+   Open media", Some(ui.available_width())).clicked() {
-            self.perform(&ctx, Action::Open);
-        }
-        if theme::wide(ui, "↗   Network stream").clicked() {
-            self.perform(&ctx, Action::OpenUrl);
-        }
-
+        let count = self.session.queue.items.len();
         egui::TopBottomPanel::bottom("sidebar_footer")
             .frame(egui::Frame::NONE)
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                ui.add_space(GAP);
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    let half = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
-                    let save = ui.add_enabled(
-                        !self.session.queue.items.is_empty(),
-                        egui::Button::new("Save queue")
-                            .min_size(Vec2::new(half, theme::BUTTON_HEIGHT)),
-                    );
-                    if save.clicked() {
-                        self.picker
-                            .save_queue(&ctx, &self.session.store.settings.last_dir);
-                    }
-                    let clear = ui.add_enabled(
-                        !self.session.queue.items.is_empty(),
-                        egui::Button::new("Clear").min_size(Vec2::new(half, theme::BUTTON_HEIGHT)),
-                    );
-                    if clear.clicked() {
-                        self.session.clear_queue();
-                        self.selected = None;
-                    }
+                    let items = match count {
+                        1 => "1 item".to_owned(),
+                        n => format!("{n} items"),
+                    };
+                    ui.add_space(4.0);
+                    ui.label(theme::muted(items));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.add_enabled_ui(count > 0, |ui| {
+                            if theme::flat(ui, "Clear").clicked() {
+                                self.session.clear_queue();
+                                self.selected = None;
+                            }
+                            if theme::flat(ui, "Save queue")
+                                .on_hover_text("Save the queue as a playlist")
+                                .clicked()
+                            {
+                                self.picker
+                                    .save_queue(&ctx, &self.session.store.settings.last_dir);
+                            }
+                        });
+                    });
                 });
-                let hint = format!(
-                    "{}  Play / pause   ·   {}  Fullscreen",
-                    self.key_hint(Action::Play),
-                    self.key_hint(Action::Fullscreen)
-                );
-                ui.add(egui::Label::new(theme::muted(hint)).truncate());
             });
 
-        ui.label(theme::muted(format!(
-            "PLAY QUEUE  ·  {}",
-            self.session.queue.items.len()
-        )));
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
-                .hint_text("Filter queue…")
+                .hint_text("Filter queue")
                 .desired_width(f32::INFINITY)
-                .margin(Margin::symmetric(10, 8)),
+                .margin(Margin::symmetric(10, 7)),
         );
-        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.add_space(4.0);
         self.queue_list(ui);
     }
 
     fn queue_list(&mut self, ui: &mut egui::Ui) {
         let needle = self.filter.trim().to_lowercase();
+        let p = theme::palette(ui.ctx());
         let mut play = None;
         let mut remove = None;
         egui::ScrollArea::vertical()
@@ -529,22 +583,19 @@ impl Frontend {
                     let current = self.session.queue.current == Some(index);
                     let selected = self.selected == Some(index);
                     let (rect, row) = ui
-                        .allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
+                        .allocate_exact_size(Vec2::new(ui.available_width(), 36.0), Sense::click());
                     geometry::note(ui.ctx(), &item.title, rect);
-                    let fill = if current || selected {
-                        theme::SELECTED_BG
+                    let fill = if selected || (current && self.selected.is_none()) {
+                        p.selected
                     } else if row.hovered() {
-                        theme::HOVER
+                        p.hover
                     } else {
                         Color32::TRANSPARENT
                     };
-                    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
-                    let color = if current {
-                        theme::SELECTED_TEXT
-                    } else {
-                        theme::TEXT
-                    };
-                    let text_rect = rect.shrink2(Vec2::new(GAP, 0.0));
+                    ui.painter()
+                        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
+                    let color = if current { p.accent_text } else { p.text };
+                    let text_rect = rect.shrink2(Vec2::new(10.0, 0.0));
                     // Left-aligned, unlike `ui.put`, which centres its widget.
                     let mut text_ui = ui.new_child(
                         UiBuilder::new()
@@ -585,11 +636,11 @@ impl Frontend {
                     });
                 }
                 if self.session.queue.items.is_empty() {
-                    ui.add_space(8.0);
-                    ui.label(theme::muted("Nothing queued yet."));
+                    ui.add_space(GAP);
+                    ui.vertical_centered(|ui| ui.label(theme::muted("Nothing queued yet.")));
                 } else if shown == 0 {
-                    ui.add_space(8.0);
-                    ui.label(theme::muted("No matches."));
+                    ui.add_space(GAP);
+                    ui.vertical_centered(|ui| ui.label(theme::muted("No matches.")));
                 }
             });
         if let Some(index) = play {
@@ -605,75 +656,58 @@ impl Frontend {
 
     // ----- main view -----
 
-    fn main_view(&mut self, ui: &mut egui::Ui, surface: &mut dyn Surface) {
-        self.header(ui);
-        ui.add_space(GAP);
-        let video_height = (ui.available_height() - CONTROLS_HEIGHT).max(120.0);
-        let (rect, _) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), video_height),
-            Sense::hover(),
-        );
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(6), Color32::BLACK);
-        let inner = rect.shrink(1.0);
-        geometry::note(ui.ctx(), "Video area", inner);
-        surface.paint(ui, inner);
-        self.video_interaction(ui, inner, false);
-        self.video_overlays(ui, inner);
-        ui.painter().rect_stroke(
-            rect,
-            CornerRadius::same(6),
-            Stroke::new(1.0_f32, theme::BORDER),
-            StrokeKind::Inside,
-        );
-
-        ui.add_space(GAP / 2.0);
-        ui.label(theme::muted(self.session.status()));
-        self.seek_row(ui);
-        self.transport_row(ui);
+    /// The picture, or a welcome page while nothing is loaded.
+    fn video_view(&mut self, ui: &mut egui::Ui, surface: &mut dyn Surface) {
+        let rect = ui.max_rect();
+        geometry::note(ui.ctx(), "Video area", rect);
+        if self.session.queue.current.is_some() {
+            ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
+            surface.paint(ui, rect);
+        }
+        self.video_interaction(ui, rect, false);
+        self.video_overlays(ui, rect);
     }
 
-    fn header(&mut self, ui: &mut egui::Ui) {
+    /// The row above the picture: open on the left, the menus on the right. The window's own
+    /// title bar already names what is playing.
+    fn toolbar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let playing = self
-            .session
-            .queue
-            .current
-            .and_then(|c| self.session.queue.items.get(c))
-            .map(|i| i.title.clone());
+        // Narrow windows drop the toolbar's extras; the main and right-click menus have them.
+        let width = ui.available_width();
         ui.horizontal(|ui| {
-            let menus_width = 220.0;
-            let text_width = (ui.available_width() - menus_width).max(120.0);
-            ui.allocate_ui(Vec2::new(text_width, 40.0), |ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    let heading = if playing.is_some() {
-                        "Now playing"
-                    } else {
-                        "Welcome"
-                    };
-                    ui.label(theme::muted(heading));
-                    let title = playing.as_deref().unwrap_or("Open something to begin");
-                    ui.add(egui::Label::new(RichText::new(title).size(18.0).strong()).truncate());
-                });
-            });
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if theme::button(ui, "Open…")
+                .on_hover_text(format!("Open files ({})", self.key_hint(Action::Open)))
+                .clicked()
+            {
+                self.perform(&ctx, Action::Open);
+            }
+            if width >= 600.0
+                && theme::flat(ui, "Open link…")
+                    .on_hover_text(format!(
+                        "Open a stream or video page ({})",
+                        self.key_hint(Action::OpenUrl)
+                    ))
+                    .clicked()
+            {
+                self.perform(&ctx, Action::OpenUrl);
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // Quiet header menus: no resting fill or outline until hovered.
+                // Menu buttons are flat until hovered or open.
                 let widgets = &mut ui.visuals_mut().widgets;
                 widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                widgets.inactive.bg_stroke = Stroke::NONE;
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let more =
-                    ui.menu_button(RichText::new("…").strong(), |ui| self.more_menu(ui, &ctx));
-                geometry::note(&ctx, "…", more.response.rect);
-                let video = ui.menu_button(RichText::new("Video").color(theme::MUTED), |ui| {
-                    self.video_menu(ui, &ctx)
+                ui.spacing_mut().button_padding = Vec2::new(10.0, 8.0);
+                let more = ui.menu_button(RichText::new("☰").size(16.0), |ui| {
+                    self.more_menu(ui, &ctx)
                 });
+                let more = theme::named(more.response, "Main menu");
+                geometry::note(&ctx, "…", more.rect);
+                if width < 340.0 {
+                    return;
+                }
+                let video = ui.menu_button("Video", |ui| self.video_menu(ui, &ctx));
                 geometry::note(&ctx, "Video", video.response.rect);
-                let audio = ui.menu_button(
-                    RichText::new("Audio & subtitles").color(theme::MUTED),
-                    |ui| self.audio_menu(ui, &ctx),
-                );
+                let audio = ui.menu_button("Audio & subtitles", |ui| self.audio_menu(ui, &ctx));
                 geometry::note(&ctx, "Audio & subtitles", audio.response.rect);
             });
         });
@@ -708,6 +742,7 @@ impl Frontend {
 
     /// Everything drawn over the picture: the empty state, spinner, messages and the drop hint.
     fn video_overlays(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let p = theme::palette(ui.ctx());
         let current = self.session.queue.current.is_some();
         let state = self.session.state();
         if !current && !self.dropping {
@@ -715,48 +750,86 @@ impl Frontend {
         } else if self.session.streams.activity().is_some()
             || matches!(state, State::Opening | State::Buffering)
         {
-            let spinner = egui::Spinner::new().size(40.0).color(theme::ACCENT);
+            let spinner = egui::Spinner::new()
+                .size(32.0)
+                .color(Color32::from_white_alpha(200));
             ui.put(
-                egui::Rect::from_center_size(rect.center(), Vec2::splat(40.0)),
+                egui::Rect::from_center_size(rect.center(), Vec2::splat(32.0)),
                 spinner,
             );
         }
 
-        if let Some(message) = self.session.flash_message() {
+        // Messages and what is going on (connecting, a loop) sit in a small dark pill.
+        let message = self
+            .session
+            .flash_message()
+            .map(str::to_owned)
+            .or_else(|| self.notice());
+        if let Some(message) = message {
             let painter = ui.painter();
-            let galley = painter.layout_no_wrap(
-                message.to_owned(),
-                FontId::proportional(15.0),
+            let font = FontId::proportional(self.body_size.round());
+            let galley = painter.layout(
+                message,
+                font,
                 Color32::WHITE,
+                (rect.width() - 48.0).max(80.0),
             );
-            let size = galley.size() + Vec2::new(28.0, 16.0);
+            let size = galley.size() + Vec2::new(24.0, 12.0);
             let pill = egui::Rect::from_center_size(
-                rect.center_top() + Vec2::new(0.0, 14.0 + size.y / 2.0),
+                rect.center_top() + Vec2::new(0.0, GAP + size.y / 2.0),
                 size,
             );
-            painter.rect_filled(pill, CornerRadius::same(12), Color32::from_black_alpha(190));
-            painter.galley(pill.min + Vec2::new(14.0, 8.0), galley, Color32::WHITE);
+            painter.rect_filled(
+                pill,
+                CornerRadius::same(theme::WINDOW_RADIUS),
+                Color32::from_black_alpha(180),
+            );
+            painter.galley(pill.min + Vec2::new(12.0, 6.0), galley, Color32::WHITE);
         }
 
         if self.dropping {
             let painter = ui.painter();
-            painter.rect_filled(rect, CornerRadius::same(6), Color32::from_black_alpha(170));
+            painter.rect_filled(rect, 0.0, Color32::from_black_alpha(150));
             painter.rect_stroke(
-                rect.shrink(10.0),
-                CornerRadius::same(10),
-                Stroke::new(2.0_f32, theme::ACCENT),
+                rect.shrink(GAP),
+                CornerRadius::same(theme::WINDOW_RADIUS),
+                Stroke::new(2.0_f32, p.accent),
                 StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
                 "Drop to play",
-                FontId::proportional(26.0),
-                theme::ACCENT,
+                FontId::proportional(20.0),
+                Color32::WHITE,
             );
         }
     }
 
+    /// Ongoing work worth a word over the picture: opening a link, or an A-B loop.
+    fn notice(&self) -> Option<String> {
+        self.session.queue.current?;
+        if let Some(activity) = self.session.streams.activity() {
+            return Some(
+                match activity {
+                    Activity::Checking => "Opening link…",
+                    Activity::Streamlink => "Connecting with Streamlink…",
+                    Activity::Ytdlp => "Resolving link with yt-dlp…",
+                }
+                .to_owned(),
+            );
+        }
+        match self.session.loop_points() {
+            (Some(a), b) => Some(format!(
+                "Loop {} – {}",
+                clock(a),
+                b.map_or("…".to_owned(), clock)
+            )),
+            _ => None,
+        }
+    }
+
+    /// The welcome page: what to do, and recent media when there is room.
     fn empty_state(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         let ctx = ui.ctx().clone();
         let queued = !self.session.queue.items.is_empty();
@@ -777,47 +850,43 @@ impl Frontend {
                 .max_rect(rect.shrink2(Vec2::new(24.0, 0.0)))
                 .layout(Layout::top_down(Align::Center)),
         );
-        let content = 230.0
+        let content = 150.0
             + if recent.is_empty() {
                 0.0
             } else {
-                48.0 + 32.0 * recent.len() as f32
+                40.0 + 34.0 * recent.len() as f32
             };
-        child.spacing_mut().item_spacing.y = GAP;
+        child.spacing_mut().item_spacing.y = GAP / 2.0;
         child.add_space(((rect.height() - content) / 2.0).max(8.0));
-        if let Some(brand) = &self.brand {
-            child.image((brand.id(), Vec2::splat(48.0)));
-        }
-        child.label(RichText::new("Lumen").size(32.0).strong());
-        child.label(theme::muted("Every format. Every frame."));
-        child.add_space(GAP / 2.0);
-        let heading = if queued {
-            "Ready when you are"
+        let (heading, detail) = if queued {
+            ("Ready when you are", "Press play to start the queue.")
         } else {
-            "Drop media here"
+            ("Drop media here", "Or open a file or a link.")
         };
-        child.label(RichText::new(heading).size(16.0).color(theme::TEXT));
+        theme::heading(&mut child, heading, Some((self.body_size + 8.0).round()));
+        child.label(theme::muted(detail));
+        child.add_space(GAP);
         if queued {
-            if theme::primary(&mut child, "▶   Play", Some(180.0)).clicked() {
+            if theme::suggested(&mut child, "Play", Some(140.0)).clicked() {
                 self.session.toggle();
             }
-        } else if theme::primary(&mut child, "+   Open media", Some(180.0)).clicked() {
-            self.perform(&ctx, Action::Open);
+        } else {
+            if theme::suggested(&mut child, "Open…", Some(140.0)).clicked() {
+                self.perform(&ctx, Action::Open);
+            }
+            if theme::flat(&mut child, "Open link…").clicked() {
+                self.perform(&ctx, Action::OpenUrl);
+            }
         }
-        child.label(theme::muted(format!(
-            "or press {} to paste a link",
-            self.key_hint(Action::OpenUrl)
-        )));
         if !recent.is_empty() {
-            child.add_space(GAP / 2.0);
-            child.label(theme::muted("RECENT"));
+            child.add_space(GAP * 1.5);
+            child.label(theme::muted("Recent"));
             child.spacing_mut().item_spacing.y = 0.0;
             for source in recent {
                 let name = crate::queue::title_of(&source);
-                let button = egui::Button::new(RichText::new(name).color(theme::TEXT))
-                    .fill(Color32::TRANSPARENT)
-                    .stroke(Stroke::NONE)
-                    .min_size(Vec2::new(300.0, 32.0));
+                let button = egui::Button::new(name)
+                    .frame_when_inactive(false)
+                    .min_size(Vec2::new(300.0, 34.0));
                 if child.add(button).on_hover_text(&source).clicked() {
                     self.session.add(&[source], true);
                 }
@@ -837,10 +906,10 @@ impl Frontend {
 
         ui.horizontal(|ui| {
             ui.add_sized(
-                [46.0, 24.0],
-                egui::Label::new(RichText::new(clock(shown)).monospace().color(theme::MUTED)),
+                [52.0, 24.0],
+                egui::Label::new(RichText::new(clock(shown)).monospace().weak()),
             );
-            let width = (ui.available_width() - 62.0).max(40.0);
+            let width = (ui.available_width() - 58.0).max(40.0);
             let value = match (self.scrubbing, duration) {
                 (Some(v), _) => v,
                 (None, _) if live => 1.0,
@@ -898,14 +967,13 @@ impl Frontend {
                 output.response.on_hover_text_at_pointer(text);
             }
             let end = if live {
-                "● LIVE".to_owned()
+                RichText::new("Live").color(theme::palette(ui.ctx()).accent_text)
             } else {
-                clock(duration.unwrap_or(0))
+                RichText::new(clock(duration.unwrap_or(0)))
+                    .monospace()
+                    .weak()
             };
-            ui.add_sized(
-                [56.0, 24.0],
-                egui::Label::new(RichText::new(end).monospace().color(theme::MUTED)),
-            );
+            ui.add_sized([52.0, 24.0], egui::Label::new(end));
         });
     }
 
@@ -913,7 +981,7 @@ impl Frontend {
         let ctx = ui.ctx().clone();
         let narrow = ui.available_width() < NARROW;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.spacing_mut().item_spacing.x = 2.0;
             let queue = &mut self.session.queue;
             if theme::toggle(ui, "🔀", "Shuffle", queue.shuffle).clicked() {
                 queue.shuffle = !queue.shuffle;
@@ -922,10 +990,16 @@ impl Frontend {
                 self.session.advance(-1);
             }
             let playing = self.session.state() == State::Playing;
-            let play = theme::primary(ui, if playing { "⏸" } else { "▶" }, Some(64.0));
-            if theme::named(play, if playing { "Pause" } else { "Play" }).clicked() {
+            ui.add_space(4.0);
+            let play = theme::circular(
+                ui,
+                if playing { "⏸" } else { "▶" },
+                if playing { "Pause" } else { "Play" },
+            );
+            if play.clicked() {
                 self.session.toggle();
             }
+            ui.add_space(4.0);
             if theme::icon(ui, "⏭", "Next").clicked() {
                 self.session.advance(1);
             }
@@ -935,7 +1009,7 @@ impl Frontend {
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.spacing_mut().item_spacing.x = 2.0;
                 let fullscreen = is_fullscreen(&ctx);
                 if theme::icon(
                     ui,
@@ -950,47 +1024,37 @@ impl Frontend {
                 {
                     self.perform(&ctx, Action::Fullscreen);
                 }
-                if theme::toggle(ui, "🗖", "Mini player", self.is_mini()).clicked() {
-                    self.perform(&ctx, Action::Mini);
-                }
-                if narrow {
-                    let muted = self.session.engine.muted();
-                    if theme::icon(ui, if muted { "🔇" } else { "🔊" }, "Mute").clicked() {
-                        self.session.toggle_mute();
+                if !narrow {
+                    let volume = self.session.store.settings.volume;
+                    ui.add_space(4.0);
+                    let output = bar::show(
+                        ui,
+                        Vec2::new(110.0, 24.0),
+                        &Bar {
+                            value: volume as f32 / 200.0,
+                            enabled: true,
+                            markers: &[0.5],
+                            band: None,
+                        },
+                    );
+                    geometry::note(ui.ctx(), "Volume bar", output.response.rect);
+                    output.response.on_hover_text(format!("Volume {volume}%"));
+                    if let (true, Some(value)) = (output.pressed || output.released, output.pointer)
+                    {
+                        self.session
+                            .set_volume((value * 200.0 / 5.0).round() as u32 * 5);
                     }
-                    return;
-                }
-                let volume = self.session.store.settings.volume;
-                let boosted = volume > 100;
-                ui.add_sized(
-                    [44.0, 24.0],
-                    egui::Label::new(
-                        RichText::new(format!("{volume}%"))
-                            .monospace()
-                            .color(if boosted { theme::ACCENT } else { theme::MUTED }),
-                    ),
-                );
-                let output = bar::show(
-                    ui,
-                    Vec2::new(120.0, 24.0),
-                    &Bar {
-                        value: volume as f32 / 200.0,
-                        enabled: true,
-                        markers: &[0.5],
-                        band: None,
-                    },
-                );
-                geometry::note(ui.ctx(), "Volume bar", output.response.rect);
-                if let (true, Some(value)) = (output.pressed || output.released, output.pointer) {
-                    self.session
-                        .set_volume((value * 200.0 / 5.0).round() as u32 * 5);
                 }
                 let muted = self.session.engine.muted();
                 if theme::icon(ui, if muted { "🔇" } else { "🔊" }, "Mute").clicked() {
                     self.session.toggle_mute();
                 }
-                self.speed_menu(ui);
-                self.quality_menu(ui);
+                if !narrow {
+                    ui.add_space(4.0);
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    self.speed_menu(ui);
+                    self.quality_menu(ui);
+                }
             });
         });
     }
@@ -999,7 +1063,7 @@ impl Frontend {
         let rate = self.session.rate();
         let mut chosen = None;
         let combo = egui::ComboBox::from_id_salt("speed")
-            .width(70.0)
+            .width(56.0)
             .selected_text(format!("{rate}×"))
             .show_ui(ui, |ui| {
                 for candidate in RATES {
@@ -1059,14 +1123,15 @@ impl Frontend {
                 .anchor(Align2::LEFT_BOTTOM, Vec2::ZERO)
                 .order(Order::Foreground)
                 .show(ctx, |ui| {
+                    let p = theme::palette(ctx);
                     egui::Frame::new()
                         .fill(Color32::from_rgba_unmultiplied(
-                            theme::BG.r(),
-                            theme::BG.g(),
-                            theme::BG.b(),
-                            225,
+                            p.window.r(),
+                            p.window.g(),
+                            p.window.b(),
+                            235,
                         ))
-                        .inner_margin(Margin::symmetric(16, 10))
+                        .inner_margin(Margin::symmetric(12, 8))
                         .show(ui, |ui| {
                             ui.set_width(width - 32.0);
                             self.seek_row(ui);

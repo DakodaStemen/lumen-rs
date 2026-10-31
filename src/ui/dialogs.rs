@@ -1,47 +1,50 @@
 //! Windows over the player: open a link, preferences with key rebinding, media information.
 
-use eframe::egui::{self, Align2, Color32, RichText, Vec2};
+use eframe::egui::text::{CCursor, CCursorRange};
+use eframe::egui::{self, Align, Align2, Layout, RichText, Vec2};
 
 use super::{Frontend, PrefsTab, UrlDialog, geometry, theme};
 use crate::keys::{self, Action, binding_text};
-use crate::streams::is_network_url;
+use crate::streams::{looks_like_local_path, normalize_url_input, strip_doubled_scheme};
 use crate::tuning;
 
-/// Warnings and failures; the theme has no dedicated error colour.
-const ERROR: Color32 = Color32::from_rgb(0xf0, 0x8a, 0x80);
-
-fn window(title: &str) -> egui::Window<'_> {
-    egui::Window::new(title)
+fn window<'a>(ctx: &egui::Context, title: &'a str) -> egui::Window<'a> {
+    egui::Window::new(RichText::new(title).strong())
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-        .frame(
-            egui::Frame::window(&egui::Style::default())
-                .fill(theme::SIDEBAR)
-                .stroke(egui::Stroke::new(1.0_f32, theme::BORDER))
-                .inner_margin(egui::Margin::same(GAP as i8 + 4)),
-        )
+        .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(18)))
 }
 
 /// The one spacing unit between groups.
 const GAP: f32 = 12.0;
 
-/// A small muted heading that starts a group of settings.
+/// The heading that starts a group of settings.
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(GAP / 2.0);
-    ui.label(theme::muted(title.to_uppercase()));
+    theme::heading(ui, title, None);
 }
 
 fn tool_status(ui: &mut egui::Ui, name: &str, found: bool, purpose: &str) {
+    let p = theme::palette(ui.ctx());
     ui.horizontal(|ui| {
         if found {
-            ui.label(RichText::new("✔").color(theme::ACCENT));
+            ui.label(RichText::new("✔").color(p.accent_text));
             ui.label(format!("{name} is installed"));
         } else {
-            ui.label(RichText::new("✖").color(ERROR));
+            ui.label(RichText::new("✖").color(p.error));
             ui.label(format!("{name} was not found. Install it to {purpose}."));
         }
     });
+}
+
+/// Puts the text cursor at the end of the field `id`.
+fn cursor_to_end(ui: &egui::Ui, id: egui::Id, text: &str) {
+    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+        let end = CCursor::new(text.chars().count());
+        state.cursor.set_char_range(Some(CCursorRange::one(end)));
+        state.store(ui.ctx(), id);
+    }
 }
 
 impl Frontend {
@@ -55,35 +58,57 @@ impl Frontend {
         let Some(UrlDialog {
             mut text,
             mut rejected,
+            mut fresh,
         }) = self.url.take()
         else {
             return;
         };
+        let p = theme::palette(ctx);
         let mut open = true;
         let mut submit = false;
         let mut cancel = false;
-        window("Open network stream")
+        window(ctx, "Open network stream")
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.set_min_width(440.0);
+                ui.set_width(440.0);
                 ui.spacing_mut().item_spacing.y = GAP;
-                ui.label("Stream or video page URL (HTTP, HTTPS, RTSP, RTMP, UDP).");
                 ui.label(theme::muted(
-                    "Twitch, Kick and YouTube links play through Streamlink and yt-dlp.",
+                    "A stream or video page. Twitch, Kick and YouTube links play through Streamlink and yt-dlp.",
                 ));
                 let field = ui.add(
                     egui::TextEdit::singleline(&mut text)
                         .desired_width(f32::INFINITY)
-                        .hint_text("https://"),
+                        .margin(egui::Margin::symmetric(10, 8))
+                        .hint_text("twitch.tv/channel"),
                 );
+                if field.changed() {
+                    rejected = false;
+                    // A whole link pasted after the prefilled https:// replaces it.
+                    if let Some(fixed) = strip_doubled_scheme(&text) {
+                        text = fixed;
+                        cursor_to_end(ui, field.id, &text);
+                    }
+                }
+                if fresh {
+                    // Start typing after the https:// rather than in front of it.
+                    cursor_to_end(ui, field.id, &text);
+                    fresh = false;
+                }
                 field.request_focus();
                 if rejected {
-                    ui.colored_label(ERROR, "Enter a supported network URL.");
+                    let message = if looks_like_local_path(&text) {
+                        "That is a file on this computer. Use Open… for files."
+                    } else {
+                        "Enter a supported network URL."
+                    };
+                    ui.colored_label(p.error, message);
                 }
-                ui.horizontal(|ui| {
+                ui.add_space(GAP / 2.0);
+                let row = Vec2::new(ui.available_width(), theme::BUTTON_HEIGHT);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    submit = theme::primary(ui, "Open", Some(100.0)).clicked() || enter;
-                    if ui.button("Cancel").clicked() {
+                    submit = theme::suggested(ui, "Open", Some(88.0)).clicked() || enter;
+                    if theme::button(ui, "Cancel").clicked() {
                         cancel = true;
                     }
                 });
@@ -92,15 +117,19 @@ impl Frontend {
                 }
             });
         if submit {
-            if is_network_url(&text) {
-                self.session.add(&[text.trim().to_owned()], true);
+            if let Some(link) = normalize_url_input(&text) {
+                self.session.add(&[link], true);
                 return;
             }
             rejected = true;
         } else if !open || cancel {
             return;
         }
-        self.url = Some(UrlDialog { text, rejected });
+        self.url = Some(UrlDialog {
+            text,
+            rejected,
+            fresh,
+        });
     }
 
     fn preferences(&mut self, ctx: &egui::Context) {
@@ -111,7 +140,8 @@ impl Frontend {
         let mut keys_changed = false;
         let mut settings_changed = false;
         let mut tuning_changed = false;
-        window("Preferences").open(&mut open).show(ctx, |ui| {
+        let p = theme::palette(ctx);
+        window(ctx, "Preferences").open(&mut open).show(ctx, |ui| {
             ui.set_min_width(500.0);
             ui.spacing_mut().item_spacing.y = GAP;
             ui.horizontal(|ui| {
@@ -391,7 +421,7 @@ impl Frontend {
                                 });
                         });
                     if let Some(message) = &state.message {
-                        ui.colored_label(ERROR, message);
+                        ui.colored_label(p.error, message);
                     }
                 }
             }
@@ -424,37 +454,41 @@ impl Frontend {
         let rows = self.session.engine.media_info();
         let source = self.session.source();
         let mut open = true;
-        window("Media information").open(&mut open).show(ctx, |ui| {
-            ui.set_min_width(380.0);
-            ui.spacing_mut().item_spacing.y = GAP / 2.0;
-            match source {
-                None => {
-                    ui.label(theme::muted("Nothing is playing."));
-                }
-                Some(source) => {
-                    ui.add(
-                        egui::Label::new(RichText::new(crate::queue::title_of(&source)).strong())
+        window(ctx, "Media information")
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.set_min_width(380.0);
+                ui.spacing_mut().item_spacing.y = GAP / 2.0;
+                match source {
+                    None => {
+                        ui.label(theme::muted("Nothing is playing."));
+                    }
+                    Some(source) => {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(crate::queue::title_of(&source)).strong(),
+                            )
                             .truncate(),
-                    );
-                    ui.add(egui::Label::new(theme::muted(&source)).truncate());
-                    section(ui, "Details");
-                    egui::Grid::new("info")
-                        .num_columns(2)
-                        .spacing([18.0, 6.0])
-                        .show(ui, |ui| {
-                            for (label, value) in &rows {
-                                ui.label(theme::muted(label));
-                                ui.add(egui::Label::new(value).truncate())
-                                    .on_hover_text(value);
-                                ui.end_row();
-                            }
-                        });
-                    if rows.is_empty() {
-                        ui.label(theme::muted("Still opening…"));
+                        );
+                        ui.add(egui::Label::new(theme::muted(&source)).truncate());
+                        section(ui, "Details");
+                        egui::Grid::new("info")
+                            .num_columns(2)
+                            .spacing([18.0, 6.0])
+                            .show(ui, |ui| {
+                                for (label, value) in &rows {
+                                    ui.label(theme::muted(label));
+                                    ui.add(egui::Label::new(value).truncate())
+                                        .on_hover_text(value);
+                                    ui.end_row();
+                                }
+                            });
+                        if rows.is_empty() {
+                            ui.label(theme::muted("Still opening…"));
+                        }
                     }
                 }
-            }
-        });
+            });
         self.info = open;
     }
 }

@@ -260,6 +260,9 @@ impl Frontend {
 
     pub(super) fn more_menu(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         ui.set_min_width(220.0);
+        self.entry(ui, ctx, "Open…", Action::Open, false);
+        self.entry(ui, ctx, "Open link…", Action::OpenUrl, false);
+        ui.separator();
         self.entry(ui, ctx, "Stop", Action::Stop, false);
         submenu(ui, "Open recent", |ui| {
             let recent = self.session.store.settings.recent.clone();

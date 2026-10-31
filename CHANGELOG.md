@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A minimal look that follows the desktop: light or dark and the accent colour from the
+  freedesktop portal (with `gsettings` as a fallback, and live changes), the system interface and
+  monospace fonts through fontconfig, and libadwaita-like colours. Flat buttons, no gradients or
+  branding on the welcome page, a toolbar with Open… and Open link…, the video edge to edge, and the
+  status line replaced by a message over the picture only when there is something to say. The mini
+  player button moved to the Video menu (Ctrl+M); the volume percentage is the volume bar's tooltip.
+- The network dialog starts with `https://` filled in. Links typed without a scheme
+  (`twitch.tv/name`, `www.youtube.com/watch?v=…`, `//host/path`) get `https://`; a whole link
+  pasted after the prefix replaces it instead of producing `https://https://…`; schemes are
+  lower-cased and surrounding whitespace dropped. Local paths are never turned into links.
 - Quality defaults: mpv `profile=gpu-hq` for the window, a hardware-decoding picker and an HDR
   tone-mapping choice; the active decoder appears in Media information. HDR is shown tone-mapped to SDR
   (the video framebuffer is 8-bit RGBA).
