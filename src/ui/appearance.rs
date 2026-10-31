@@ -295,7 +295,14 @@ fn loadable(path: &std::path::Path) -> bool {
 pub struct SystemFonts {
     pub ui: Option<SystemFont>,
     pub mono: Option<SystemFont>,
+    /// Fonts for scripts the interface font lacks (CJK, Arabic, Hebrew, Thai, Devanagari),
+    /// so names in those scripts draw as text rather than empty boxes.
+    pub fallbacks: Vec<SystemFont>,
 }
+
+/// Languages whose scripts get a fallback font, as fontconfig language tags.
+#[cfg(all(unix, not(target_os = "macos")))]
+const FALLBACK_LANGS: [&str; 6] = ["ja", "ko", "ar", "he", "th", "hi"];
 
 /// Finds the interface fonts through GNOME's settings and fontconfig, or the Windows UI font.
 pub fn system_fonts() -> SystemFonts {
@@ -311,9 +318,26 @@ pub fn system_fonts() -> SystemFonts {
                 size_pt,
             })
         };
+        let ui = lookup("font-name", "sans-serif");
+        let mut fallbacks: Vec<SystemFont> = Vec::new();
+        for lang in FALLBACK_LANGS {
+            let Some((path, index)) = fc_match(&format!("sans-serif:lang={lang}")) else {
+                continue;
+            };
+            let known = |f: &SystemFont| f.path == path && f.index == index;
+            if ui.as_ref().is_some_and(known) || fallbacks.iter().any(known) {
+                continue;
+            }
+            fallbacks.push(SystemFont {
+                path,
+                index,
+                size_pt: None,
+            });
+        }
         SystemFonts {
-            ui: lookup("font-name", "sans-serif"),
+            ui,
             mono: lookup("monospace-font-name", "monospace"),
+            fallbacks,
         }
     }
     #[cfg(target_os = "windows")]
@@ -330,6 +354,11 @@ pub fn system_fonts() -> SystemFonts {
         SystemFonts {
             ui: font("segoeui.ttf"),
             mono: font("consola.ttf"),
+            // Segoe UI's own fallbacks for East Asian and other scripts.
+            fallbacks: ["YuGothM.ttc", "malgun.ttf", "msyh.ttc"]
+                .into_iter()
+                .filter_map(font)
+                .collect(),
         }
     }
     #[cfg(not(any(all(unix, not(target_os = "macos")), target_os = "windows")))]

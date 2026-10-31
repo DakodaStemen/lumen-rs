@@ -270,6 +270,20 @@ pub fn install_fonts(ctx: &egui::Context, fonts: &SystemFonts) -> f32 {
             .or_default()
             .insert(0, name.to_owned());
     }
+    // Last in line: only reached for characters none of the fonts above can draw.
+    for (i, font) in fonts.fallbacks.iter().enumerate() {
+        let Ok(bytes) = std::fs::read(&font.path) else {
+            continue;
+        };
+        let mut data = FontData::from_owned(bytes);
+        data.index = font.index;
+        let name = format!("fallback-{i}");
+        defs.font_data
+            .insert(name.clone(), std::sync::Arc::new(data));
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            defs.families.entry(family).or_default().push(name.clone());
+        }
+    }
     ctx.set_fonts(defs);
     body_size(fonts.ui.as_ref().and_then(|f| f.size_pt))
 }
