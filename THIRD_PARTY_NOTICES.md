@@ -27,6 +27,16 @@ CC BY-NC-SA 4.0 by its contributors.
 
 Rust does not remove licensing obligations for bundled assets, fonts or third-party code.
 
+## Adwaita symbolic icons
+
+`assets/icons/*-symbolic.svg` are unmodified copies of icons from the GNOME
+[Adwaita icon theme](https://gitlab.gnome.org/GNOME/adwaita-icon-theme)
+(version 51), © the GNOME Project, licensed under
+[CC-BY-SA-3.0](https://creativecommons.org/licenses/by-sa/3.0/) or
+[LGPL-3.0](https://www.gnu.org/licenses/lgpl-3.0.html). Lumen draws the copies in
+the desktop's own icon theme when one is installed and falls back to these.
+Recolouring them at run time (white, then tinted) is not a change to the files.
+
 ## Bundled libmpv inventory and source
 
 The MIT license covers Lumen's own source, not the entire binary distribution.
