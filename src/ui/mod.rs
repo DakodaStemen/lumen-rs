@@ -1001,6 +1001,10 @@ impl Frontend {
             self.empty_state(ui, rect);
         } else if let Some(error) = self.session.error().map(str::to_owned) {
             self.error_state(ui, rect, &error);
+        } else if matches!(state, State::Playing | State::Paused)
+            && !self.session.engine.has_video()
+        {
+            self.audio_state(ui, rect);
         } else if self.session.streams.activity().is_some()
             || matches!(state, State::Opening | State::Buffering)
         {
@@ -1058,6 +1062,51 @@ impl Frontend {
                 Color32::WHITE,
             );
         }
+    }
+
+    /// Sound without a picture or cover art: its name under a music icon, rather than a
+    /// black rectangle.
+    fn audio_state(&self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let title = self
+            .session
+            .queue
+            .current
+            .and_then(|c| self.session.queue.items.get(c))
+            .map(|item| item.title.clone())
+            .unwrap_or_default();
+        let icon = if rect.height() > 220.0 { 96.0 } else { 0.0 };
+        let block = icon + 24.0 + 24.0;
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_center_size(
+                    rect.center(),
+                    Vec2::new((rect.width() - 48.0).max(80.0), block),
+                ))
+                .layout(Layout::top_down(Align::Center)),
+        );
+        child.spacing_mut().item_spacing.y = 0.0;
+        if icon > 0.0 {
+            let (at, _) = child.allocate_exact_size(Vec2::splat(icon), Sense::hover());
+            icons::paint(
+                &child,
+                Icon::AudioFile,
+                at,
+                icon,
+                Color32::from_white_alpha(70),
+            );
+            child.add_space(24.0);
+        }
+        child
+            .add(
+                egui::Label::new(
+                    RichText::new(&title)
+                        .size((self.body_size * 1.2).round())
+                        .color(Color32::from_gray(220)),
+                )
+                .truncate()
+                .selectable(false),
+            )
+            .on_hover_text(&title);
     }
 
     /// What went wrong with the current entry, laid out like a GNOME status page.
