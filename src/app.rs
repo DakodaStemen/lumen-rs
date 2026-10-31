@@ -20,6 +20,7 @@ impl App {
     pub fn new(session: Session, video: Video, ctx: &egui::Context) -> Self {
         let mut frontend = Frontend::new(session, ctx);
         frontend.follow_desktop(ctx);
+        crate::platform::close_on_termination(ctx.clone());
         Self {
             frontend,
             video: Arc::new(Mutex::new(Some(video))),

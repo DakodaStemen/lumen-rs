@@ -4,6 +4,52 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+/// Turns SIGTERM, SIGINT and SIGHUP into a normal window close, so the playback position
+/// and settings are saved on logout, shutdown or `kill` just as when the window is closed.
+/// If the close has not finished after a few seconds, Lumen exits anyway.
+#[cfg(unix)]
+pub fn close_on_termination(ctx: eframe::egui::Context) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    static REQUESTED: AtomicBool = AtomicBool::new(false);
+    extern "C" fn request(_: libc::c_int) {
+        // Only an atomic store: anything more is not async-signal-safe.
+        REQUESTED.store(true, Ordering::SeqCst);
+    }
+    let handler = request as extern "C" fn(libc::c_int);
+    for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+        // SAFETY: `request` only stores to an atomic, which is async-signal-safe.
+        unsafe {
+            libc::signal(signal, handler as libc::sighandler_t);
+        }
+    }
+    let watcher = std::thread::Builder::new()
+        .name("termination".into())
+        .spawn(move || {
+            while !REQUESTED.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Close);
+            ctx.request_repaint();
+            std::thread::sleep(Duration::from_secs(3));
+            // 128 + SIGTERM, as if the signal had ended the process.
+            std::process::exit(143);
+        });
+    if watcher.is_err() {
+        // Without the watcher the signals must keep their default, so Lumen can still be ended.
+        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            // SAFETY: restoring the default disposition.
+            unsafe {
+                libc::signal(signal, libc::SIG_DFL);
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn close_on_termination(_ctx: eframe::egui::Context) {}
+
 /// mpv refuses to start unless numbers are parsed with the C locale.
 pub fn set_c_numeric_locale() {
     // SAFETY: called once, before mpv is created; `c"C"` is a valid NUL-terminated string.
