@@ -148,8 +148,17 @@ pub fn image(icon: Icon, size: f32, color: Color32) -> Image<'static> {
 
 /// Paints the icon centred in `rect`.
 pub fn paint(ui: &egui::Ui, icon: Icon, rect: egui::Rect, size: f32, color: Color32) {
-    let square = egui::Rect::from_center_size(rect.center(), Vec2::splat(size));
-    image(icon, size, color).paint_at(ui, square);
+    image(icon, size, color).paint_at(ui, snapped(ui.ctx().pixels_per_point(), rect, size));
+}
+
+/// A `size` square centred in `rect`, moved onto whole physical pixels so the icon's
+/// one-pixel strokes stay sharp at fractional scales such as 125 % and 150 %.
+fn snapped(pixels_per_point: f32, rect: egui::Rect, size: f32) -> egui::Rect {
+    let ppp = pixels_per_point.max(0.1);
+    let side = (size * ppp).round() / ppp;
+    let min = rect.center() - Vec2::splat(side / 2.0);
+    let min = egui::pos2((min.x * ppp).round() / ppp, (min.y * ppp).round() / ppp);
+    egui::Rect::from_min_size(min, Vec2::splat(side))
 }
 
 /// The recoloured SVG for `icon`, loaded once.
@@ -322,6 +331,22 @@ fn current_theme() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icons_land_on_whole_pixels_at_any_scale() {
+        let rect = egui::Rect::from_min_size(egui::pos2(253.3, 6.0), Vec2::splat(34.0));
+        for ppp in [1.0, 1.25, 1.5, 2.0] {
+            let square = snapped(ppp, rect, 16.0);
+            for v in [square.min.x, square.min.y, square.width()] {
+                let px = v * ppp;
+                assert!(
+                    (px - px.round()).abs() < 1e-3,
+                    "{v} at {ppp}x is off the grid"
+                );
+            }
+            assert!((square.center() - rect.center()).length() <= 1.0 / ppp);
+        }
+    }
 
     #[test]
     fn colours_become_white_and_opacity_stays() {
